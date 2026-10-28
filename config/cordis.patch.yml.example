@@ -1,0 +1,636 @@
+# CustomDeepseek provider configuration for the DeepSeek Harness `web` profile.
+#
+# Live copy: $DSH_HOME/profiles/web/cordis.patch.yml  (DSH_HOME defaults to ~/.dsh)
+#
+# This is the profile's own patch layer, applied after the dsh-base and
+# dsh-web-app bundles. A patch replaces the targeted row's WHOLE `config`, so
+# the `llm-pi-ai` row below restates every provider it owns. The web profile
+# hot-reloads this file: edits apply on the next request, no restart needed.
+#
+# Credentials are NEVER written here. Each route names an environment variable
+# with `apiKeyEnv`; dsh resolves it per request from (in order) the credential
+# store $DSH_HOME/.credentials.yaml, the launch environment, <cwd>/.env, and
+# $DSH_HOME/.env. The `dsh` launcher (scripts/dsh-launcher.sh) exports the
+# keys from the macOS Keychain into the launch environment.
+#
+# Mirrors CustomKIMI's config/config.toml.example (same gateways, same models).
+# Route keys must be lowercase and start with a letter, so Kimi's `7api/...`
+# aliases become `sevenapi/...` here.
+#
+# Reasoning levels: dsh offers off, minimal, low, medium, high, xhigh, max.
+# `reasoningEfforts` lists the levels a model offers and the value sent on the
+# wire for each. `off:` with no value sends nothing (the model does not think);
+# `off: none` sends "none" (CloseRouter and 7api accept it to switch reasoning
+# off). Models that cannot stop thinking (Kimi K3, GLM 5.3) map `off` to their
+# lowest level, exactly as CustomKIMI does. A model without
+# `reasoningEfforts` has no Effort menu and uses the gateway's default.
+
+- id: llm-pi-ai
+  config:
+    providers:
+
+      # ── CloseRouter, OpenAI-compatible Chat Completions ────────────────────
+      closerouter:
+        displayName: CloseRouter
+        apiKeyEnv: CLOSEROUTER_API_KEY
+        api: openai-completions
+        baseURL: https://api.closerouter.dev/v1
+        reasoning: high
+        models:
+          - id: openai/gpt-6-astra
+            name: GPT-6 Astra
+            contextWindow: 786432
+            maxTokens: 32000
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: openai/gpt-6.1-sol
+            name: GPT-6.1 Sol
+            contextWindow: 786432
+            maxTokens: 128000
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: deepseek/deepseek-v4-pro-0813
+            name: DeepSeek V4 Pro
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              low: low
+              high: high
+              max: max
+          - id: z-ai/glm-5.3
+            name: GLM-5.3
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              low: low
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: z-ai/glm-5.3-flash
+            name: GLM-5.3 Flash
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              low: low
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: google/gemini-4-argon
+            name: Gemini 4 Argon
+            contextWindow: 128000
+            maxTokens: 16384
+            input: [text, image]
+            reasoningEfforts:
+              minimal: minimal
+              low: low
+              medium: medium
+              high: high
+          - id: x-ai/grok-4.7
+            name: Grok 4.7
+            contextWindow: 256000
+            maxTokens: 32768
+            input: [text, image]
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+
+      # ── CloseRouter, Anthropic-compatible Messages ─────────────────────────
+      # pi-ai appends /v1/messages itself, so the base URL has no /v1.
+      # forceAdaptiveThinking sends thinking {type: adaptive} + output_config
+      # {effort}, which CloseRouter accepts (verified 2026-10-28).
+      closerouter-anthropic:
+        displayName: CloseRouter (Anthropic)
+        apiKeyEnv: CLOSEROUTER_API_KEY
+        api: anthropic-messages
+        baseURL: https://api.closerouter.dev
+        reasoning: high
+        compat:
+          forceAdaptiveThinking: true
+        models:
+          - id: anthropic/claude-fable-5.1
+            name: Claude Fable 5.1
+            contextWindow: 1000000
+            maxTokens: 32000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: anthropic/claude-fable-5
+            name: Claude Fable 5
+            contextWindow: 1000000
+            maxTokens: 32000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          # CloseRouter also publishes an "ultra" effort for the Opus models;
+          # dsh has no level above max, so it is not offered.
+          - id: anthropic/claude-opus-4.8
+            name: Claude Opus 4.8
+            contextWindow: 200000
+            maxTokens: 32000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: anthropic/claude-opus-4.6
+            name: Claude Opus 4.6
+            contextWindow: 200000
+            maxTokens: 31000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+
+      # ── 7api (https://7api.st), Chat Completions ───────────────────────────
+      sevenapi:
+        displayName: 7api
+        apiKeyEnv: SEVENAPI_API_KEY
+        api: openai-completions
+        baseURL: https://7api.st/v1
+        reasoning: high
+        # 7api rejects the OpenAI `developer` role that pi-ai sends the system
+        # prompt in for reasoning models (GLM-5.3 returns HTTP 400). Send it as
+        # the `system` role instead. Verified 2026-10-28.
+        compat:
+          supportsDeveloperRole: false
+        models:
+          - id: gemini-4-argon
+            name: Gemini 4 Argon (7api)
+            contextWindow: 128000
+            maxTokens: 16384
+          - id: deepseek-v4-flash-0731
+            name: DeepSeek V4 Flash (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+          - id: deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+          - id: deepseek-v4-pro-0813
+            name: DeepSeek V4 Pro (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+          - id: deepseek-v4-pro-uncensored
+            name: DeepSeek V4 Pro Uncensored (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+          - id: mimo-v2.6-pro
+            name: MiMo V2.6 Pro (7api)
+            contextWindow: 600000
+            maxTokens: 65536
+          - id: mimo-v2.6-flash
+            name: MiMo V2.6 Flash (7api)
+            contextWindow: 600000
+            maxTokens: 65536
+          # Kimi K3 cannot stop thinking: "off" sends its lowest level.
+          - id: kimi-k3
+            name: Kimi K3 (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: low
+              low: low
+              high: high
+              max: max
+          - id: grok-4.7
+            name: Grok 4.7 (7api)
+            contextWindow: 500000
+            maxTokens: 65536
+          - id: grok-4.6
+            name: Grok 4.6 (7api)
+            contextWindow: 500000
+            maxTokens: 65536
+          - id: grok-4.5
+            name: Grok 4.5 (7api)
+            contextWindow: 200000
+            maxTokens: 64000
+          - id: glm-5.2
+            name: GLM-5.2 (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          # The GLM 5.3 family cannot stop thinking: "off" sends its lowest level.
+          - id: glm-5.3
+            name: GLM-5.3 (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: low
+              low: low
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: glm-5.3-uncensored
+            name: GLM-5.3 Uncensored (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: max
+              max: max
+          - id: glm-5.3-flash
+            name: GLM-5.3 Flash (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: low
+              low: low
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: glm-5.3-flash-uncensored
+            name: GLM-5.3 Flash Uncensored (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: max
+              max: max
+          - id: glm-5.3-abliterated
+            name: GLM-5.3 Abliterated (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: high
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: glm-5.3-flash-abliterated
+            name: GLM-5.3 Flash Abliterated (7api)
+            contextWindow: 1000000
+            maxTokens: 65536
+            reasoningEfforts:
+              off: high
+              high: high
+              xhigh: xhigh
+              max: max
+
+      # ── 7api GPT models, OpenAI Chat Completions ───────────────────────────
+      # Kimi reaches these through 7api's Responses API. The harness renders an
+      # empty reply from 7api's Responses stream (the stream delivers the text,
+      # but it is not shown), so these use Chat Completions here instead, which
+      # 7api serves for the same models and the harness renders correctly.
+      # 7api rejects the `developer` role, so the system prompt goes as
+      # `system`; `off: none` sends `reasoning_effort: none` to stop reasoning.
+      # Verified over the wire and in the Web UI 2026-10-28.
+      sevenapi-gpt:
+        displayName: 7api (GPT)
+        apiKeyEnv: SEVENAPI_API_KEY
+        api: openai-completions
+        baseURL: https://7api.st/v1
+        reasoning: high
+        compat:
+          supportsDeveloperRole: false
+        models:
+          - id: gpt-6-astra
+            name: GPT-6 Astra (7api)
+            contextWindow: 1050000
+            maxTokens: 128000
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: gpt-6.1-sol
+            name: GPT-6.1 Sol (7api)
+            contextWindow: 1050000
+            maxTokens: 128000
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: gpt-6-sol
+            name: GPT-6 Sol (7api)
+            contextWindow: 1050000
+            maxTokens: 128000
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: gpt-6-luna
+            name: GPT-6 Luna (7api)
+            contextWindow: 1050000
+            maxTokens: 128000
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: gpt-5.6-sol
+            name: GPT-5.6 Sol (7api)
+            contextWindow: 1000000
+            maxTokens: 128000
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: gpt-5.6-terra
+            name: GPT-5.6 Terra (7api)
+            contextWindow: 1000000
+            maxTokens: 128000
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: gpt-5.6-luna
+            name: GPT-5.6 Luna (7api)
+            contextWindow: 1000000
+            maxTokens: 128000
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: gpt-5.5
+            name: GPT-5.5 (7api)
+            contextWindow: 1000000
+            maxTokens: 128000
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+
+      # ── 7api, Anthropic Messages (Claude models, adaptive thinking) ────────
+      sevenapi-anthropic:
+        displayName: 7api (Anthropic)
+        apiKeyEnv: SEVENAPI_API_KEY
+        api: anthropic-messages
+        baseURL: https://7api.st
+        reasoning: high
+        compat:
+          forceAdaptiveThinking: true
+        models:
+          - id: claude-fable-5
+            name: Claude Fable 5 (7api)
+            contextWindow: 1000000
+            maxTokens: 64000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: claude-sonnet-5
+            name: Claude Sonnet 5 (7api)
+            contextWindow: 1000000
+            maxTokens: 64000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: claude-haiku-5-5
+            name: Claude Haiku 5.5 (7api)
+            contextWindow: 1000000
+            maxTokens: 64000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: claude-sonnet-5-5
+            name: Claude Sonnet 5.5 (7api)
+            contextWindow: 1000000
+            maxTokens: 64000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: claude-opus-4-6
+            name: Claude Opus 4.6 (7api)
+            contextWindow: 1000000
+            maxTokens: 64000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              max: max
+          - id: claude-opus-4-7
+            name: Claude Opus 4.7 (7api)
+            contextWindow: 1000000
+            maxTokens: 64000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: claude-opus-4-8
+            name: Claude Opus 4.8 (7api)
+            contextWindow: 1000000
+            maxTokens: 64000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: claude-opus-5
+            name: Claude Opus 5 (7api)
+            contextWindow: 1000000
+            maxTokens: 64000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: claude-opus-5-5
+            name: Claude Opus 5.5 (7api)
+            contextWindow: 1000000
+            maxTokens: 128000
+            reasoningEfforts:
+              off:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+
+      # ── OpenRouter ─────────────────────────────────────────────────────────
+      # `openrouter` is a provider pi-ai ships, so the route keeps OpenRouter's
+      # wire conventions (reasoning: {effort}, no developer role). Its shipped
+      # catalog mixes two protocols, and these models are newer than it, so
+      # the route names its protocol explicitly. pi-ai's catalog is replaced
+      # by exactly this list; add more with one `- id:` entry each.
+      # Output caps are 131072 (what CustomKIMI sends on Chat requests);
+      # OpenRouter refuses the published 943718 once input + output exceeds
+      # the context or the remaining credit.
+      openrouter:
+        displayName: OpenRouter
+        apiKeyEnv: OPENROUTER_API_KEY
+        api: openai-completions
+        baseURL: https://openrouter.ai/api/v1
+        reasoning: high
+        models:
+          - id: meta/muse-wonder
+            name: Meta Muse Wonder (OpenRouter)
+            contextWindow: 1048576
+            maxTokens: 131072
+            input: [text, image]
+            reasoningEfforts:
+              minimal: minimal
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: moonshotai/kimi-k3.1-pro
+            name: Kimi K3.1 Pro (OpenRouter)
+            contextWindow: 1048576
+            maxTokens: 131072
+            input: [text, image]
+            reasoningEfforts:
+              off: none
+              low: low
+              high: high
+              max: max
+          # CustomKIMI pins this model to Cerebras with a per-model
+          # `extra_body.provider` field. dsh has no per-model request-field
+          # setting, so OpenRouter chooses the host; the limits below are
+          # Cerebras's.
+          - id: qwen/qwen3.8-27b
+            name: Qwen 3.8 27B (OpenRouter)
+            contextWindow: 65536
+            maxTokens: 32768
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              xhigh: xhigh
+
+      # ── Muse forwarder (private relay, OpenAI Responses API) ───────────────
+      # The relay uses a self-signed certificate: the launcher sets
+      # NODE_EXTRA_CA_CERTS from $DSH_HOME/muse-forwarder.crt (or
+      # ~/.kimi-code/muse-forwarder.crt). Needs MUSE_FORWARDER_KEY.
+      muse:
+        displayName: Muse
+        apiKeyEnv: MUSE_FORWARDER_KEY
+        api: openai-responses
+        baseURL: https://65.21.196.107:8788/v1
+        reasoning: high
+        models:
+          - id: muse-wonder-full-1.0
+            name: Muse Wonder Full 1.0
+            contextWindow: 1000000
+            maxTokens: 128000
+            input: [text, image]
+            reasoningEfforts:
+              minimal: minimal
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: muse-wonder-1.0
+            name: Muse Wonder 1.0
+            contextWindow: 1000000
+            maxTokens: 128000
+            input: [text, image]
+            reasoningEfforts:
+              minimal: minimal
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: muse-spark-1.3
+            name: Muse Spark 1.3
+            contextWindow: 1000000
+            maxTokens: 128000
+            input: [text, image]
+            reasoningEfforts:
+              minimal: minimal
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+
+# Default model for new sessions, same as CustomKIMI's default_model.
+# Selecting a model in the picker saves a new default.
+- id: agent-default-model
+  config:
+    provider: closerouter
+    model: openai/gpt-6-astra
+    reasoningEffort: high

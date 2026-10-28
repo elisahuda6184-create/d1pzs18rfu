@@ -1,0 +1,23 @@
+# The official DeepSeek Harness release plus the custom patches is rebuilt from
+# custom/patches by scripts/update.sh; it is not part of this repository.
+source/
+source.previous/
+source.next/
+source.swap/
+
+# Exported bundles.
+dist/
+
+# Notes stay on this machine; the published copy carries no description of
+# what the harness is or which providers it talks to.
+docs/
+AI-INSTALL-GUIDE.md
+custom/FEATURES.md
+custom/history/
+
+# Local noise.
+.DS_Store
+*.log
+.env
+.env.*
+.credentials.yaml

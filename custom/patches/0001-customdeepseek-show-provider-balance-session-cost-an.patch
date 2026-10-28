@@ -1,0 +1,2383 @@
+From c0050dda1a9f564bac35c37647b5fcb2f2d4a531 Mon Sep 17 00:00:00 2001
+From: CustomDeepseek <customdeepseek@localhost>
+Date: Wed, 28 Oct 2026 19:37:51 +0700
+Subject: [PATCH] customdeepseek: show provider balance, session cost and muse
+ usage in the composer
+
+A pill before the model picker reads the active route's balance (CloseRouter
+/v1/credits, 7api /v1/balance, OpenRouter /api/v1/credits with the management
+key, else /api/v1/key), the session's cost summed from the gateways' usage.cost
+over every subagent session, and for the muse route the forwarder's weekly and
+5h-window usage. pi-ai's patch now carries the gateway's usage.cost as
+providerCost; TokenUsage gains cost; llm-pi-ai maps it. New Host plugin
+@deepseek-ai/dsh-provider-billing (sessionCost projection, pollers, pricing
+from the 7api and OpenRouter model lists, providerBilling.watch stream) and
+client plugin @deepseek-ai/dsh-client-ui-provider-billing, both mounted in the
+web bundle.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ packages/api/remotes/package.json             |   1 +
+ packages/api/remotes/src/client/index.ts      |   5 +-
+ packages/api/remotes/tsconfig.client.json     |   3 +
+ packages/bundle/web-app/cordis.patch.yml      |   7 +
+ packages/bundle/web-app/package.json          |   2 +
+ packages/client/ui-provider-billing/README.md |  28 +
+ .../client/ui-provider-billing/README.zh.md   |  28 +
+ .../client/ui-provider-billing/package.json   |  71 +++
+ .../src/client/BillingPill.module.css         |  17 +
+ .../src/client/BillingPill.tsx                |  73 +++
+ .../ui-provider-billing/src/client/index.ts   |  58 ++
+ .../ui-provider-billing/src/client/locales.ts |  26 +
+ .../ui-provider-billing/src/css-modules.d.ts  |   4 +
+ .../client/ui-provider-billing/src/index.ts   |   4 +
+ .../client/ui-provider-billing/tsconfig.json  |  48 ++
+ .../ui-provider-billing/tsdown.config.ts      |   3 +
+ packages/llm/llm-pi-ai/src/stream.ts          |   4 +
+ packages/llm/llm/src/types.ts                 |   6 +
+ packages/llm/provider-billing/README.md       |  41 ++
+ packages/llm/provider-billing/README.zh.md    |  28 +
+ packages/llm/provider-billing/package.json    |  78 +++
+ .../provider-billing/src/cost-projection.ts   | 163 ++++++
+ packages/llm/provider-billing/src/index.ts    | 504 ++++++++++++++++++
+ .../llm/provider-billing/src/providers.ts     | 202 +++++++
+ packages/llm/provider-billing/src/types.ts    | 100 ++++
+ .../tests/cost-projection.spec.ts             |  94 ++++
+ .../provider-billing/tests/providers.spec.ts  | 147 +++++
+ packages/llm/provider-billing/tsconfig.json   |  26 +
+ patches/@earendil-works__pi-ai@1.1.0.patch    |  53 +-
+ pnpm-lock.yaml                                | 109 +++-
+ tsconfig.base.json                            |   3 +
+ tsconfig.client.json                          |   1 +
+ tsconfig.host.json                            |   1 +
+ 33 files changed, 1930 insertions(+), 8 deletions(-)
+ create mode 100644 packages/client/ui-provider-billing/README.md
+ create mode 100644 packages/client/ui-provider-billing/README.zh.md
+ create mode 100644 packages/client/ui-provider-billing/package.json
+ create mode 100644 packages/client/ui-provider-billing/src/client/BillingPill.module.css
+ create mode 100644 packages/client/ui-provider-billing/src/client/BillingPill.tsx
+ create mode 100644 packages/client/ui-provider-billing/src/client/index.ts
+ create mode 100644 packages/client/ui-provider-billing/src/client/locales.ts
+ create mode 100644 packages/client/ui-provider-billing/src/css-modules.d.ts
+ create mode 100644 packages/client/ui-provider-billing/src/index.ts
+ create mode 100644 packages/client/ui-provider-billing/tsconfig.json
+ create mode 100644 packages/client/ui-provider-billing/tsdown.config.ts
+ create mode 100644 packages/llm/provider-billing/README.md
+ create mode 100644 packages/llm/provider-billing/README.zh.md
+ create mode 100644 packages/llm/provider-billing/package.json
+ create mode 100644 packages/llm/provider-billing/src/cost-projection.ts
+ create mode 100644 packages/llm/provider-billing/src/index.ts
+ create mode 100644 packages/llm/provider-billing/src/providers.ts
+ create mode 100644 packages/llm/provider-billing/src/types.ts
+ create mode 100644 packages/llm/provider-billing/tests/cost-projection.spec.ts
+ create mode 100644 packages/llm/provider-billing/tests/providers.spec.ts
+ create mode 100644 packages/llm/provider-billing/tsconfig.json
+
+diff --git a/packages/api/remotes/package.json b/packages/api/remotes/package.json
+index 288aabea9b4be979577c927dcece85548f9a217a..84bfa3dd131d52afb7ca82fba7be00fa034df0f1 100644
+--- a/packages/api/remotes/package.json
++++ b/packages/api/remotes/package.json
+@@ -91,6 +91,7 @@
+     "@deepseek-ai/cordis": "workspace:~",
+     "zod": "4.4.3",
+     "@deepseek-ai/dsh-command-feedback": "workspace:*",
++    "@deepseek-ai/dsh-provider-billing": "workspace:*",
+     "@deepseek-ai/dsh-api-terminal-controller": "workspace:*",
+     "@deepseek-ai/dsh-plugin-manager": "workspace:*",
+     "@deepseek-ai/dsh-plugin-market": "workspace:*",
+diff --git a/packages/api/remotes/src/client/index.ts b/packages/api/remotes/src/client/index.ts
+index 90fc6b7fde473508246b3a455cf27e7408ec55c5..0f7fe68392e06e6d5abe60e194f4a59ba7f8bfac 100644
+--- a/packages/api/remotes/src/client/index.ts
++++ b/packages/api/remotes/src/client/index.ts
+@@ -20,6 +20,7 @@ import pluginInventoryRemote from '@deepseek-ai/dsh-host-plugin-inventory/remote
+ import messageFeedbackRemote from '@deepseek-ai/dsh-message-feedback/remote'
+ import permissionPresetsRemote from '@deepseek-ai/dsh-permission-presets/remote'
+ import sessionFeedbackRemote from '@deepseek-ai/dsh-command-feedback/remote'
++import providerBillingRemote from '@deepseek-ai/dsh-provider-billing/remote'
+ import fileUploadsRemote from '@deepseek-ai/dsh-client-file-upload/remote'
+ import sessionReferencesRemote from '@deepseek-ai/dsh-session-reference/remote'
+ import subagentsRemote from '@deepseek-ai/dsh-subagent/remote'
+@@ -59,6 +60,8 @@ export type {} from '@deepseek-ai/dsh-host-plugin-inventory/remote'
+ export type {} from '@deepseek-ai/dsh-message-feedback/remote'
+ export type {} from '@deepseek-ai/dsh-permission-presets/remote'
+ export type {} from '@deepseek-ai/dsh-command-feedback/remote'
++export type {} from '@deepseek-ai/dsh-provider-billing/remote'
++export type * from '@deepseek-ai/dsh-provider-billing/types'
+ export type {} from '@deepseek-ai/dsh-client-file-upload/remote'
+ export type {} from '@deepseek-ai/dsh-session-reference/remote'
+ export type {} from '@deepseek-ai/dsh-subagent/remote'
+@@ -189,7 +192,7 @@ export async function apply(ctx: Context): Promise<() => Promise<void>> {
+       productAnalyticsRemote, agentPresetsRemote, commandsRemote, settingsControllerRemote, accountRemote,
+       goalsRemote, llmRemote, dynamicRemote, scheduleRemote,
+       pluginInventoryRemote, pluginManagerRemote, pluginMarketRemote, pluginRegistryProbeRemote,
+-      messageFeedbackRemote, sessionFeedbackRemote,
++      messageFeedbackRemote, sessionFeedbackRemote, providerBillingRemote,
+       fileUploadsRemote, sessionReferencesRemote,
+       permissionPresetsRemote, subagentsRemote, sessionRemote, jobRemote, workspaceRemote, workspaceFilesRemote, terminalRemote,
+       officeToPdfRemote, userQuestionsRemote,
+diff --git a/packages/api/remotes/tsconfig.client.json b/packages/api/remotes/tsconfig.client.json
+index 70181b08c58fe4a0267f57584f98126c4c130865..3ce4ac46d2ef295d82f0bc0135d8830cfea3b2b4 100644
+--- a/packages/api/remotes/tsconfig.client.json
++++ b/packages/api/remotes/tsconfig.client.json
+@@ -96,6 +96,9 @@
+     {
+       "path": "../../feedback/command-feedback"
+     },
++    {
++      "path": "../../llm/provider-billing"
++    },
+     {
+       "path": "../terminal-controller/tsconfig.client.json"
+     },
+diff --git a/packages/bundle/web-app/cordis.patch.yml b/packages/bundle/web-app/cordis.patch.yml
+index 254db4f1891decac2aba5e00e96c55fce4737e52..35a0e4014b264578d82a1100f27f7e1b6dc72c85 100644
+--- a/packages/bundle/web-app/cordis.patch.yml
++++ b/packages/bundle/web-app/cordis.patch.yml
+@@ -415,6 +415,13 @@
+     - id: ui-deepseek-model-label-1017
+       name: '@deepseek-ai/dsh-client-ui-deepseek-model-label-1017'
+ 
++    # CustomDeepseek: provider balance, session cost and muse usage before the model picker.
++    - id: provider-billing
++      name: '@deepseek-ai/dsh-provider-billing'
++
++    - id: ui-provider-billing
++      name: '@deepseek-ai/dsh-client-ui-provider-billing'
++
+     - id: ui-permission
+       name: '@deepseek-ai/dsh-client-ui-permission-presets'
+ 
+diff --git a/packages/bundle/web-app/package.json b/packages/bundle/web-app/package.json
+index 25583890dded6d662e73cecbea7efbc75462f839..87c6c992d7a7940f9e88806c0f00874cbba12b4e 100644
+--- a/packages/bundle/web-app/package.json
++++ b/packages/bundle/web-app/package.json
+@@ -92,6 +92,8 @@
+     "@deepseek-ai/dsh-client-ui-message-feedback": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-model-selection": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-deepseek-model-label-1017": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-provider-billing": "workspace:*",
++    "@deepseek-ai/dsh-provider-billing": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-open-in-app": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-permission-presets": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-plan": "workspace:*",
+diff --git a/packages/client/ui-provider-billing/README.md b/packages/client/ui-provider-billing/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..9c43da384457cbe7e38132d44b6f077e6020a764
+--- /dev/null
++++ b/packages/client/ui-provider-billing/README.md
+@@ -0,0 +1,28 @@
++---
++description: "Show the active provider's balance, this session's cost including subagents, and muse usage before the model picker."
++kind: "package-reference"
++---
++
++# @deepseek-ai/dsh-client-ui-provider-billing
++
++English | [中文](README.zh.md)
++
++## Summary
++
++This CustomDeepseek plugin puts one pill before the composer's model picker. For a CloseRouter, 7api or OpenRouter route it reads `CloseRouter $107.31 · session $0.0123`; for the muse route it reads `Muse weekly 1% · 5h 3%`. The figures come from `@deepseek-ai/dsh-provider-billing`'s stream; the session cost covers every subagent session and is hidden whenever any call could not be priced.
++
++## Use this package
++
++The Web bundle includes this plugin. It has no configuration fields; the provider routes and poll periods belong to `@deepseek-ai/dsh-provider-billing`.
++
++## Model Experience
++
++None, as the plugin only renders figures the Host already holds.
++
++#### KV Cache effect
++
++None.
++
++## Known Limitations and Deferred Work
++
++- The pill has no click-open breakdown; the hover title names what each figure is.
+diff --git a/packages/client/ui-provider-billing/README.zh.md b/packages/client/ui-provider-billing/README.zh.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..ee8b69d77679dd6ae84dcd0ee77706a6d0e78e6f
+--- /dev/null
++++ b/packages/client/ui-provider-billing/README.zh.md
+@@ -0,0 +1,28 @@
++---
++description: "在模型选择器前显示当前供应商余额、含子代理的本次会话费用以及 muse 用量。"
++kind: "package-reference"
++---
++
++# @deepseek-ai/dsh-client-ui-provider-billing
++
++[English](README.md) | 中文
++
++## Summary
++
++此 CustomDeepseek 插件在编辑器模型选择器前放置一个标签。对 CloseRouter、7api 或 OpenRouter 路由显示 `CloseRouter $107.31 · session $0.0123`；对 muse 路由显示 `Muse 每周 1% · 5h 3%`。数字来自 `@deepseek-ai/dsh-provider-billing` 的流；会话费用包含所有子代理会话，任一调用无法定价时整体隐藏。
++
++## Use this package
++
++Web 包已包含此插件，没有配置项；供应商路由与轮询周期属于 `@deepseek-ai/dsh-provider-billing`。
++
++## Model Experience
++
++无，插件只渲染宿主已有的数字。
++
++#### KV Cache effect
++
++无。
++
++## Known Limitations and Deferred Work
++
++- 标签没有点击展开的明细；悬停提示说明每个数字的含义。
+diff --git a/packages/client/ui-provider-billing/package.json b/packages/client/ui-provider-billing/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..9a643434b2154caa664a31014aa0be8a9b5ed4df
+--- /dev/null
++++ b/packages/client/ui-provider-billing/package.json
+@@ -0,0 +1,71 @@
++{
++  "name": "@deepseek-ai/dsh-client-ui-provider-billing",
++  "description": "Composer pill with the active provider's balance, this session's cost including subagents, and muse usage",
++  "version": "0.2.1-rc.3",
++  "publishConfig": {
++    "access": "public"
++  },
++  "repository": {
++    "type": "git",
++    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
++    "directory": "packages/client/ui-provider-billing"
++  },
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./client": {
++      "types": "./lib/types/client/index.d.ts",
++      "default": "./lib/client.js"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json"
++  },
++  "dsh": {
++    "client": {
++      "inject": [
++        "@deepseek-ai/dsh-api-remotes",
++        "@deepseek-ai/dsh-client-locale",
++        "@deepseek-ai/dsh-client-ui-conversation",
++        "@deepseek-ai/dsh-client-ui-model-selection",
++        "@deepseek-ai/dsh-client-ui-renderer",
++        "@deepseek-ai/dsh-client-ui-session"
++      ],
++      "platform": "web"
++    }
++  },
++  "scripts": {
++    "bundle": "tsdown",
++    "watch": "tsdown --watch"
++  },
++  "license": "MIT",
++  "peerDependencies": {
++    "@deepseek-ai/cordis": "workspace:~"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/dsh-api-gateway": "workspace:*",
++    "@deepseek-ai/dsh-api-remotes": "workspace:*",
++    "@deepseek-ai/dsh-api-session-controller": "workspace:*",
++    "@deepseek-ai/dsh-client-locale": "workspace:*",
++    "@deepseek-ai/dsh-client-store": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-conversation": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-model-selection": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-renderer": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-session": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-slots": "workspace:*",
++    "@deepseek-ai/dsh-provider-billing": "workspace:*",
++    "@deepseek-ai/dsh-session": "workspace:*",
++    "react": "^18.2.0",
++    "react-dom": "^18.2.0"
++  },
++  "files": [
++    "lib/index.js",
++    "lib/client.js",
++    "lib/types/**/*.d.ts"
++  ]
++}
+diff --git a/packages/client/ui-provider-billing/src/client/BillingPill.module.css b/packages/client/ui-provider-billing/src/client/BillingPill.module.css
+new file mode 100644
+index 0000000000000000000000000000000000000000..1236442e811609a96dc2634437631eb9979afb2a
+--- /dev/null
++++ b/packages/client/ui-provider-billing/src/client/BillingPill.module.css
+@@ -0,0 +1,17 @@
++.pill {
++  display: inline-flex;
++  align-items: center;
++  box-sizing: border-box;
++  min-width: 0;
++  max-width: min(360px, 40cqw);
++  height: 28px;
++  padding: 0 8px;
++  border-radius: var(--dsw-radius-sm);
++  color: var(--dsw-alias-label-tertiary);
++  font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
++  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
++  font-variant-numeric: tabular-nums;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
+diff --git a/packages/client/ui-provider-billing/src/client/BillingPill.tsx b/packages/client/ui-provider-billing/src/client/BillingPill.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..023b053500edece51587bf8627677b21ade9dac6
+--- /dev/null
++++ b/packages/client/ui-provider-billing/src/client/BillingPill.tsx
+@@ -0,0 +1,73 @@
++/**
++ * The billing pill before the model picker: the active provider's balance
++ * (or the muse subscription's usage) and the session's cost, subagents
++ * included. Reads the Host's billing frame and the session's model selection;
++ * renders nothing while neither figure is known.
++ */
++import { memo } from 'react'
++import type { UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
++import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
++import type { ModelDirectoryState } from '@deepseek-ai/dsh-client-ui-model-selection/client'
++import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
++import type { BillingFrame } from '@deepseek-ai/dsh-provider-billing/types'
++import type { SessionId } from '@deepseek-ai/dsh-session/types'
++import css from './BillingPill.module.css'
++
++/**
++ * The registrant's inject face: the Host frame and the session's model
++ * directory (whose `current` is the picker's selection, falling back to the
++ * catalog default before the session logged any selection or request).
++ */
++export interface BillingInjected {
++  hooks: {
++    billing: ObservableSnapshot<BillingFrame | undefined>
++    directory: ObservableSnapshot<ModelDirectoryState>
++  }
++}
++
++type BillingPillProps = InjectFace<BillingInjected> & PropsLocale<'provider-billing'> & {
++  sessionId: SessionId
++  useProjection: UseProjection
++}
++
++const percent = (ratio: number): string => String(Math.round(ratio * 100))
++
++/**
++ * Render the balance and session-cost readings for the route the session uses.
++ * @param props - the billing frame hook, the session's projections, and the pill dictionary.
++ * @returns the pill, or nothing while no figure applies.
++ */
++export const BillingPill = memo(function BillingPill({ sessionId, useProjection, useBilling, useDirectory, t }: BillingPillProps) {
++  const frame = useBilling(value => value)
++  const projected = useProjection('modelSelection', value => value?.next?.provider ?? value?.lastUsed?.provider ?? null)
++  const shown = useDirectory(value => value.current?.provider ?? null)
++  const route = projected ?? shown
++  if (frame === undefined || route === null) return null
++  const billing = frame.routes[route]
++  const cost = frame.sessionCosts[sessionId]
++  const parts: string[] = []
++  const titles: string[] = []
++  if (billing?.kind === 'muse' && billing.muse !== undefined) {
++    const { weekly, window, windowLabel, version } = billing.muse
++    parts.push(t('muse', {
++      weekly: percent(weekly.usedRatio),
++      label: windowLabel.replace(/ window$/, ''),
++      window: percent(window.usedRatio),
++    }))
++    titles.push(t('title.muse', { version: version ?? '' }).trim())
++  } else if (billing?.balanceUsd !== undefined) {
++    parts.push(t('balance', { label: billing.displayName, usd: billing.balanceUsd.toFixed(2) }))
++    titles.push(t('title.balance', { label: billing.displayName }))
++  }
++  if (cost !== undefined && cost.complete && cost.steps > 0) {
++    parts.push(t('session', { usd: cost.usd.toFixed(4) }))
++    titles.push(t('title.session', { sessions: String(cost.sessions) }))
++  }
++  if (parts.length === 0) return null
++  const separator = t('separator')
++  return (
++    <span className={css.pill} data-composer-billing title={titles.join(separator)}>
++      {parts.join(separator)}
++    </span>
++  )
++})
+diff --git a/packages/client/ui-provider-billing/src/client/index.ts b/packages/client/ui-provider-billing/src/client/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ec5514da6177ce93828f768d2828e678cbd4e8da
+--- /dev/null
++++ b/packages/client/ui-provider-billing/src/client/index.ts
+@@ -0,0 +1,58 @@
++/**
++ * Browser half: follow the Host's billing stream into one store and seat the
++ * pill before the model picker in the composer tool row.
++ */
++import type { Context } from '@deepseek-ai/cordis'
++import type {} from '@deepseek-ai/dsh-api-gateway/client'
++import type {} from '@deepseek-ai/dsh-api-remotes/client'
++import type {} from '@deepseek-ai/dsh-client-locale/client'
++import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
++import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
++import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
++import type {} from '@deepseek-ai/dsh-client-ui-session/client'
++import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
++import type { BillingFrame } from '@deepseek-ai/dsh-provider-billing/types'
++import type { SessionId } from '@deepseek-ai/dsh-session/types'
++import { BillingPill, type BillingInjected } from './BillingPill.tsx'
++import { en, zh, type BillingKey } from './locales.ts'
++
++declare module '@deepseek-ai/dsh-client-ui-slots' {
++  interface LocaleNamespaceMap {
++    /** The composer billing pill. */
++    'provider-billing': BillingKey
++  }
++}
++
++const NS = 'provider-billing'
++
++/** Required services: slot registration, localized copy, the picker's model directories, and the Host billing stream. */
++export const inject = ['slots', 'locale', 'modelDirectories', 'remote', 'remote.providerBilling']
++
++export function apply(ctx: Context): void {
++  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'provider-billing: dictionaries')
++
++  const billing = createSnapshotStore<BillingFrame | undefined>(undefined)
++  const stream = ctx.remote.$stream<BillingFrame>({
++    name: 'provider billing',
++    open: signal => ctx.remote.providerBilling.watch(signal),
++    ended: () => new Error('provider billing stream ended'),
++  })
++  ctx.effect(() => () => stream.dispose(), 'provider-billing: stream')
++  void (async () => {
++    for await (const frame of stream) {
++      billing.set(frame.value)
++      frame.accept()
++    }
++  })().catch(() => { /* the carrier reports its own failures; the pill simply stays hidden */ })
++
++  const injected = (sessionId: SessionId): BillingInjected => ({
++    hooks: { billing, directory: ctx.modelDirectories.directoryFor(sessionId).store },
++  })
++  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
++    name: 'conversation.input.right',
++    id: 'provider-billing',
++    order: 0,
++    locale: NS,
++    inject: injected,
++  }, BillingPill))
++}
+diff --git a/packages/client/ui-provider-billing/src/client/locales.ts b/packages/client/ui-provider-billing/src/client/locales.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..66ed6404c888e5be132747a930754506cb4b4078
+--- /dev/null
++++ b/packages/client/ui-provider-billing/src/client/locales.ts
+@@ -0,0 +1,26 @@
++/** Localized copy of the composer billing pill. */
++
++/** Simplified Chinese copy; the key set is the source of truth. */
++export const zh = {
++  'balance': '{label} ${usd}',
++  'session': '本次会话 ${usd}',
++  'muse': 'Muse 每周 {weekly}% · {label} {window}%',
++  'separator': ' · ',
++  'title.balance': '{label} 账户余额',
++  'title.session': '本次会话的费用，含子代理（共 {sessions} 个会话）',
++  'title.muse': 'Muse 订阅用量 {version}',
++}
++
++/** Keys owned by the billing namespace. */
++export type BillingKey = keyof typeof zh
++
++/** English copy. */
++export const en: Record<BillingKey, string> = {
++  'balance': '{label} ${usd}',
++  'session': 'session ${usd}',
++  'muse': 'Muse weekly {weekly}% · {label} {window}%',
++  'separator': ' · ',
++  'title.balance': '{label} account balance',
++  'title.session': 'Cost of this session, subagents included ({sessions} sessions)',
++  'title.muse': 'Muse subscription usage {version}',
++}
+diff --git a/packages/client/ui-provider-billing/src/css-modules.d.ts b/packages/client/ui-provider-billing/src/css-modules.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8811db126498ec8fac4acff5c3f137ffb839fec5
+--- /dev/null
++++ b/packages/client/ui-provider-billing/src/css-modules.d.ts
+@@ -0,0 +1,4 @@
++declare module '*.module.css' {
++  const classes: Record<string, string>
++  export default classes
++}
+diff --git a/packages/client/ui-provider-billing/src/index.ts b/packages/client/ui-provider-billing/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2866a82df6fc65887366da925fa5d65f49a03c37
+--- /dev/null
++++ b/packages/client/ui-provider-billing/src/index.ts
+@@ -0,0 +1,4 @@
++/** Loader entry for the composer billing pill; the browser half lives under ./client. */
++
++/** Mount the browser entry through the package's client declaration. */
++export function apply(): void {}
+diff --git a/packages/client/ui-provider-billing/tsconfig.json b/packages/client/ui-provider-billing/tsconfig.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..fa029bfabab367ee07aee930774c387b42c26659
+--- /dev/null
++++ b/packages/client/ui-provider-billing/tsconfig.json
+@@ -0,0 +1,48 @@
++{
++  "extends": "../../../tsconfig.base.client.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types"
++  },
++  "include": [
++    "src"
++  ],
++  "references": [
++    {
++      "path": "../../../vendor/cordis"
++    },
++    {
++      "path": "../locale/tsconfig.client.json"
++    },
++    {
++      "path": "../store"
++    },
++    {
++      "path": "../ui-conversation/tsconfig.client.json"
++    },
++    {
++      "path": "../ui-model-selection"
++    },
++    {
++      "path": "../ui-renderer"
++    },
++    {
++      "path": "../ui-session"
++    },
++    {
++      "path": "../ui-slots"
++    },
++    {
++      "path": "../../api/gateway/tsconfig.client.json"
++    },
++    {
++      "path": "../../api/remotes/tsconfig.client.json"
++    },
++    {
++      "path": "../../api/session-controller/tsconfig.client.json"
++    },
++    {
++      "path": "../../llm/provider-billing"
++    }
++  ]
++}
+diff --git a/packages/client/ui-provider-billing/tsdown.config.ts b/packages/client/ui-provider-billing/tsdown.config.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7aa03cebc166f1d04de1f058a5e4a3db4e94c114
+--- /dev/null
++++ b/packages/client/ui-provider-billing/tsdown.config.ts
+@@ -0,0 +1,3 @@
++import { clientBundle } from '../tsdown.client.ts'
++
++export default clientBundle(import.meta.dirname, ['lib/types/index.js'])
+diff --git a/packages/llm/llm-pi-ai/src/stream.ts b/packages/llm/llm-pi-ai/src/stream.ts
+index 30e9c79412a300adc8a373b1a5e2caa77cb69ad6..796fbb56d865058cec85634957094e8e654653a5 100644
+--- a/packages/llm/llm-pi-ai/src/stream.ts
++++ b/packages/llm/llm-pi-ai/src/stream.ts
+@@ -22,12 +22,16 @@ import { toPiReplayState } from './replay.ts'
+  *   when non-zero (pi-ai reports zeros, not absence).
+  */
+ export function mapUsage(usage: PiUsage): TokenUsage {
++  // `providerCost` is the gateway's own `usage.cost` figure, carried through
++  // by the pi-ai patch in patches/; pi-ai's catalog-computed `cost` is not it.
++  const providerCost = (usage as PiUsage & { providerCost?: unknown }).providerCost
+   return {
+     inputTokens: usage.input,
+     outputTokens: usage.output,
+     totalTokens: usage.totalTokens,
+     ...usage.cacheRead > 0 ? { cacheReadTokens: usage.cacheRead } : {},
+     ...usage.cacheWrite > 0 ? { cacheWriteTokens: usage.cacheWrite } : {},
++    ...typeof providerCost === 'number' && Number.isFinite(providerCost) && providerCost >= 0 ? { cost: providerCost } : {},
+   }
+ }
+ 
+diff --git a/packages/llm/llm/src/types.ts b/packages/llm/llm/src/types.ts
+index 8001ab81d8f4e159f1b5e02e12af4f7f6223f625..762e8a2e269a26c367122b2784cef5d318fc7cd7 100644
+--- a/packages/llm/llm/src/types.ts
++++ b/packages/llm/llm/src/types.ts
+@@ -186,6 +186,12 @@ export interface TokenUsage {
+   cacheReadTokens?: number
+   cacheWriteTokens?: number
+   reasoningTokens?: number
++  /**
++   * USD charged for this call as the gateway reported it in its usage object
++   * (CloseRouter and OpenRouter return `usage.cost`). Absent when the
++   * provider reported no cost; a call without a cost must never count as $0.
++   */
++  cost?: number
+ }
+ 
+ /**
+diff --git a/packages/llm/provider-billing/README.md b/packages/llm/provider-billing/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..b4492c14d4a6ba5e96e87e95f5714602b8e13ea2
+--- /dev/null
++++ b/packages/llm/provider-billing/README.md
+@@ -0,0 +1,41 @@
++---
++description: "Poll provider balances and muse usage, fold per-session cost including subagents, and stream it to the composer."
++kind: "package-reference"
++---
++
++# @deepseek-ai/dsh-provider-billing
++
++English | [中文](README.zh.md)
++
++## Summary
++
++This CustomDeepseek plugin shows what the active provider costs. It reads every `llm-pi-ai` route whose endpoint is CloseRouter, 7api or OpenRouter (balance) or whose credential is `MUSE_FORWARDER_KEY` (subscription usage), polls them every minute, folds every assistant call's gateway-reported `usage.cost` into a `sessionCost` projection, prices 7api and OpenRouter calls without a reported cost from their model lists, sums each session with its subagent sessions, and pushes one frame per change over the `providerBilling.watch` Remote stream.
++
++## Use this package
++
++Mount it in a profile beside `llm-pi-ai`; `@deepseek-ai/dsh-client-ui-provider-billing` renders the result. Configuration:
++
++```yaml
++- id: provider-billing
++  name: '@deepseek-ai/dsh-provider-billing'
++  config:
++    balanceRefreshMs: 60000
++    priceRefreshMs: 600000
++    openRouterManagementKeyEnv: OPENROUTER_MANAGEMENT_KEY
++```
++
++Balances: CloseRouter `GET /v1/credits` (`total_credits`), 7api `GET /v1/balance` (`balance_usd`), OpenRouter `GET /api/v1/credits` with the management key (`total_credits - total_usage`), else `GET /api/v1/key` (`limit_remaining`, `null` means unknown). The management key comes from the credential seam, or on macOS from the login Keychain entry of the same name. A failed poll hides the figure; nothing is ever shown as `$0` by mistake.
++
++Session cost: a model whose every call reported a cost sums those costs; a model with any uncosted call is priced from its provider's price list as a whole; a model that cannot be priced makes the whole figure incomplete, which the pill hides. Secrets only ever travel in the outbound `authorization` header.
++
++## Model Experience
++
++None, as the plugin changes no model input: it reads session events and provider billing endpoints and publishes figures to the browser.
++
++#### KV Cache effect
++
++None.
++
++## Known Limitations and Deferred Work
++
++- CloseRouter calls that report no cost are not estimated from rates; only 7api and OpenRouter have price lists here.
+diff --git a/packages/llm/provider-billing/README.zh.md b/packages/llm/provider-billing/README.zh.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..78f85eff8449780047e3959e450e11b3d946c530
+--- /dev/null
++++ b/packages/llm/provider-billing/README.zh.md
+@@ -0,0 +1,28 @@
++---
++description: "轮询供应商余额与 muse 用量，折叠包含子代理的会话费用，并推送到编辑器。"
++kind: "package-reference"
++---
++
++# @deepseek-ai/dsh-provider-billing
++
++[English](README.md) | 中文
++
++## Summary
++
++此 CustomDeepseek 插件显示当前供应商的费用。它读取每个端点为 CloseRouter、7api 或 OpenRouter（余额）或凭据为 `MUSE_FORWARDER_KEY`（订阅用量）的 `llm-pi-ai` 路由，每分钟轮询一次，把每次助手调用网关报告的 `usage.cost` 折叠进 `sessionCost` 投影，用模型列表为没有报告费用的 7api 与 OpenRouter 调用定价，把每个会话与其子代理会话相加，并通过 `providerBilling.watch` Remote 流在每次变化时推送一帧。
++
++## Use this package
++
++与 `llm-pi-ai` 一起挂载到 profile 中；由 `@deepseek-ai/dsh-client-ui-provider-billing` 渲染结果。
++
++## Model Experience
++
++无，插件不改变模型输入：它读取会话事件与供应商计费端点，并把数字发布到浏览器。
++
++#### KV Cache effect
++
++无。
++
++## Known Limitations and Deferred Work
++
++- 没有报告费用的 CloseRouter 调用不会按费率估算；这里只有 7api 与 OpenRouter 有价格表。
+diff --git a/packages/llm/provider-billing/package.json b/packages/llm/provider-billing/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..960574a1f08811d336978b2a648e77f87e9d3e0a
+--- /dev/null
++++ b/packages/llm/provider-billing/package.json
+@@ -0,0 +1,78 @@
++{
++  "name": "@deepseek-ai/dsh-provider-billing",
++  "description": "Provider balances, muse subscription usage, and per-session cost (subagents included) behind the composer's billing pill",
++  "version": "0.2.1-rc.3",
++  "publishConfig": {
++    "access": "public"
++  },
++  "repository": {
++    "type": "git",
++    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
++    "directory": "packages/llm/provider-billing"
++  },
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./types": {
++      "types": "./lib/types/types.d.ts",
++      "default": "./lib/types/types.js"
++    },
++    "./typert": {
++      "types": "./lib/typert.host.d.ts",
++      "default": "./lib/typert.host.js"
++    },
++    "./remote": {
++      "types": "./lib/typert.remote-client.d.ts",
++      "default": "./lib/typert.remote-client.js"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json"
++  },
++  "files": [
++    "lib/index.js",
++    "lib/types/**/*.js",
++    "lib/types/**/*.d.ts",
++    "lib/typert.host.js",
++    "lib/typert.host.d.ts",
++    "lib/typert.remote-client.js",
++    "lib/typert.remote-client.d.ts"
++  ],
++  "license": "MIT",
++  "peerDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/cordis-plugin-loader": "workspace:~",
++    "@deepseek-ai/cordis-plugin-timer": "workspace:~",
++    "@deepseek-ai/dsh-credentials": "workspace:*",
++    "@deepseek-ai/dsh-launch-environment": "workspace:*",
++    "@deepseek-ai/dsh-llm": "workspace:*",
++    "@deepseek-ai/dsh-llm-retry": "workspace:*",
++    "@deepseek-ai/dsh-session": "workspace:*",
++    "@deepseek-ai/dsh-session-projection": "workspace:*",
++    "@deepseek-ai/dsh-session-query": "workspace:*",
++    "@deepseek-ai/dsh-subagent": "workspace:*",
++    "@deepseek-ai/dsh-typert-protocol": "workspace:*"
++  },
++  "dependencies": {
++    "@deepseek-ai/schemastery": "workspace:~",
++    "zod": "4.4.3"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/cordis-plugin-loader": "workspace:~",
++    "@deepseek-ai/cordis-plugin-timer": "workspace:~",
++    "@deepseek-ai/dsh-credentials": "workspace:*",
++    "@deepseek-ai/dsh-launch-environment": "workspace:*",
++    "@deepseek-ai/dsh-llm": "workspace:*",
++    "@deepseek-ai/dsh-llm-retry": "workspace:*",
++    "@deepseek-ai/dsh-session": "workspace:*",
++    "@deepseek-ai/dsh-session-projection": "workspace:*",
++    "@deepseek-ai/dsh-session-query": "workspace:*",
++    "@deepseek-ai/dsh-subagent": "workspace:*",
++    "@deepseek-ai/dsh-typert-protocol": "workspace:*"
++  }
++}
+diff --git a/packages/llm/provider-billing/src/cost-projection.ts b/packages/llm/provider-billing/src/cost-projection.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b2f8387068df0dcaa42ce595747f4c0879412215
+--- /dev/null
++++ b/packages/llm/provider-billing/src/cost-projection.ts
+@@ -0,0 +1,163 @@
++/**
++ * The `sessionCost` projection: a pure fold of every assistant call's usage
++ * into token and cost buckets per route and model. Mirrors token-meter's
++ * slot rule: the latest sample of one (turn, step) replaces the previous one,
++ * and `llm/retry-started` reopens the slot so the retried call adds.
++ * @module @deepseek-ai/dsh-provider-billing/cost-projection
++ */
++
++import { z } from 'zod'
++import { lastAssistantStreamChunk, type TokenUsage } from '@deepseek-ai/dsh-llm'
++import type {} from '@deepseek-ai/dsh-llm-retry/types'
++import type { SessionEvent } from '@deepseek-ai/dsh-session'
++import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
++import type { SessionCostModelBuckets, SessionCostProjection } from './types.ts'
++
++const bucketsSchema = z.object({
++  inputTokens: z.number().int().nonnegative(),
++  outputTokens: z.number().int().nonnegative(),
++  cacheReadTokens: z.number().int().nonnegative(),
++  cacheWriteTokens: z.number().int().nonnegative(),
++  reportedUsd: z.number().nonnegative(),
++  uncostedSteps: z.number().int().nonnegative(),
++  steps: z.number().int().nonnegative(),
++}).strict()
++
++const modelsSchema = z.record(z.string(), z.record(z.string(), bucketsSchema))
++
++const routeSchema = z.object({ provider: z.string(), model: z.string() }).strict()
++
++const viewSchema = z.object({ models: modelsSchema }).strict()
++
++/** The unit's state schema and source of its inferred type. */
++const stateSchema = z.object({
++  models: modelsSchema,
++  /** The newest sample, replaced by a later sample of the same (turn, step). */
++  last: z.object({
++    turn: z.number().int().nonnegative(),
++    step: z.number().int().nonnegative(),
++    provider: z.string(),
++    model: z.string(),
++    buckets: bucketsSchema,
++  }).strict().nullable(),
++  /** Route of the newest request header, for attempts that committed no message. */
++  request: routeSchema.nullable(),
++}).strict()
++
++/** State of the `sessionCost` projection unit. */
++export type SessionCostState = z.infer<typeof stateSchema>
++
++declare module '@deepseek-ai/dsh-session-projection/types' {
++  interface SessionProjectionStateMap {
++    sessionCost: SessionCostState
++  }
++}
++
++const zeroBuckets = (): SessionCostModelBuckets => ({
++  inputTokens: 0,
++  outputTokens: 0,
++  cacheReadTokens: 0,
++  cacheWriteTokens: 0,
++  reportedUsd: 0,
++  uncostedSteps: 0,
++  steps: 0,
++})
++
++/** One call's usage as buckets; a call without a reported cost counts as uncosted, never as $0. */
++export function bucketsFrom(usage: TokenUsage): SessionCostModelBuckets {
++  const costed = typeof usage.cost === 'number' && Number.isFinite(usage.cost) && usage.cost >= 0
++  return {
++    inputTokens: usage.inputTokens,
++    outputTokens: usage.outputTokens,
++    cacheReadTokens: usage.cacheReadTokens ?? 0,
++    cacheWriteTokens: usage.cacheWriteTokens ?? 0,
++    reportedUsd: costed ? usage.cost as number : 0,
++    uncostedSteps: costed ? 0 : 1,
++    steps: 1,
++  }
++}
++
++const bucketsEqual = (left: SessionCostModelBuckets, right: SessionCostModelBuckets): boolean =>
++  left.inputTokens === right.inputTokens
++  && left.outputTokens === right.outputTokens
++  && left.cacheReadTokens === right.cacheReadTokens
++  && left.cacheWriteTokens === right.cacheWriteTokens
++  && left.reportedUsd === right.reportedUsd
++  && left.uncostedSteps === right.uncostedSteps
++  && left.steps === right.steps
++
++/** `a + b` or `a - b` bucket by bucket. */
++export function combineBuckets(a: SessionCostModelBuckets, b: SessionCostModelBuckets, sign: 1 | -1): SessionCostModelBuckets {
++  return {
++    inputTokens: a.inputTokens + sign * b.inputTokens,
++    outputTokens: a.outputTokens + sign * b.outputTokens,
++    cacheReadTokens: a.cacheReadTokens + sign * b.cacheReadTokens,
++    cacheWriteTokens: a.cacheWriteTokens + sign * b.cacheWriteTokens,
++    reportedUsd: Math.max(0, a.reportedUsd + sign * b.reportedUsd),
++    uncostedSteps: a.uncostedSteps + sign * b.uncostedSteps,
++    steps: a.steps + sign * b.steps,
++  }
++}
++
++function withBuckets(
++  models: SessionCostProjection['models'],
++  provider: string,
++  model: string,
++  change: (current: SessionCostModelBuckets) => SessionCostModelBuckets,
++): SessionCostProjection['models'] {
++  const current = models[provider]?.[model] ?? zeroBuckets()
++  return { ...models, [provider]: { ...models[provider], [model]: change(current) } }
++}
++
++/** The usage one durable assistant settlement reports for its attempt, if any. */
++function usageOf(event: SessionEvent): TokenUsage | undefined {
++  if (event.type === 'assistant/message' && event.data.usage !== undefined) return event.data.usage
++  if (event.type !== 'assistant/message' && event.type !== 'assistant/attempt') return undefined
++  return lastAssistantStreamChunk(event.data.stream, 'usage')?.usage
++}
++
++/** The `sessionCost` projection unit; register it on `ctx.sessionProjections`. */
++export const sessionCostProjectionDefinition = {
++  key: 'sessionCost',
++  stateVersion: 1,
++  stateSchema,
++  init: (): SessionCostState => ({ models: {}, last: null, request: null }),
++  apply: (state: SessionCostState, event: SessionEvent): SessionCostState => {
++    if (event.type === 'request/header') {
++      const { provider, model } = event.data.header.config
++      if (state.request?.provider === provider && state.request.model === model) return state
++      return { ...state, request: { provider, model } }
++    }
++    if (event.type === 'llm/retry-started') {
++      return state.last?.turn === event.data.turn && state.last.step === event.data.step
++        ? { ...state, last: null }
++        : state
++    }
++    if (event.type !== 'assistant/message' && event.type !== 'assistant/attempt') return state
++    const sample = usageOf(event)
++    if (sample === undefined) return state
++    const route = event.type === 'assistant/message'
++      ? { provider: event.data.message.source.provider, model: event.data.message.source.model }
++      : state.request
++    if (route === null) return state
++    const { turn, step } = event.data
++    const buckets = bucketsFrom(sample)
++    const previous = state.last !== null && state.last.turn === turn && state.last.step === step
++      ? state.last
++      : undefined
++    if (previous !== undefined
++      && previous.provider === route.provider
++      && previous.model === route.model
++      && bucketsEqual(previous.buckets, buckets)) return state
++    let models = state.models
++    if (previous !== undefined) {
++      models = withBuckets(models, previous.provider, previous.model, current => combineBuckets(current, previous.buckets, -1))
++    }
++    models = withBuckets(models, route.provider, route.model, current => combineBuckets(current, buckets, 1))
++    return { models, last: { turn, step, provider: route.provider, model: route.model, buckets }, request: state.request }
++  },
++  wire: {
++    viewSchema,
++    view: (state: SessionCostState): SessionCostProjection => ({ models: state.models }),
++  },
++} satisfies ProjectionDefinition<'sessionCost', SessionCostState>
+diff --git a/packages/llm/provider-billing/src/index.ts b/packages/llm/provider-billing/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a221baac146e86bf4016f6acf38394cffb26ef49
+--- /dev/null
++++ b/packages/llm/provider-billing/src/index.ts
+@@ -0,0 +1,504 @@
++/**
++ * Provider billing for the composer footer: the balance of every configured
++ * provider route whose endpoint has a known billing API (CloseRouter, 7api,
++ * OpenRouter), the muse subscription's usage, and the cost of every live
++ * session including its subagent sessions. Balances are polled every minute,
++ * price lists every ten minutes, and everything reaches the browser through
++ * one `providerBilling.watch` stream.
++ *
++ * Credentials are resolved per request through the credential seam and only
++ * ever placed in an outbound `authorization` header; nothing here returns or
++ * logs a key value.
++ * @module @deepseek-ai/dsh-provider-billing
++ */
++
++import { execFile } from 'node:child_process'
++import { userInfo } from 'node:os'
++import { FiberState, type Context } from '@deepseek-ai/cordis'
++import type {} from '@deepseek-ai/cordis-plugin-loader'
++import type {} from '@deepseek-ai/cordis-plugin-timer'
++import z from '@deepseek-ai/schemastery'
++import { credentialRef, isCredentialRefName } from '@deepseek-ai/dsh-credentials'
++import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
++import { attributionHeaders } from '@deepseek-ai/dsh-llm'
++import type { Session, SessionId } from '@deepseek-ai/dsh-session'
++import type {} from '@deepseek-ai/dsh-session-projection'
++import type {} from '@deepseek-ai/dsh-session-query'
++import type {} from '@deepseek-ai/dsh-subagent'
++import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
++import { sessionCostProjectionDefinition } from './cost-projection.ts'
++import {
++  asRecord,
++  costOfBuckets,
++  detectKind,
++  museUsageUrl,
++  parseCloseRouterBalance,
++  parseMuseUsage,
++  parseOpenRouterCredits,
++  parseOpenRouterKeyLimit,
++  parseOpenRouterPrices,
++  parseSevenApiBalance,
++  parseSevenApiPrices,
++} from './providers.ts'
++import type {
++  BillingFrame,
++  BillingKind,
++  MuseUsage,
++  RouteBilling,
++  SessionCostProjection,
++  SessionCostView,
++  TokenPrices,
++} from './types.ts'
++
++export type * from './types.ts'
++export { sessionCostProjectionDefinition } from './cost-projection.ts'
++export * from './providers.ts'
++
++/** Plugin configuration. */
++export interface Config {
++  /** How often balances and muse usage are polled, in milliseconds. */
++  balanceRefreshMs: number
++  /** How often the 7api and OpenRouter price lists are refreshed, in milliseconds. */
++  priceRefreshMs: number
++  /** Credential reference of the OpenRouter management key that may read `/credits`. */
++  openRouterManagementKeyEnv: string
++  /** Replacement for CloseRouter's `https://api.closerouter.dev/v1/credits`, for a compatible proxy. */
++  closeRouterBalanceUrl?: string
++}
++
++export const Config: z<Config> = z.object({
++  balanceRefreshMs: z.number().min(5_000).default(60_000),
++  priceRefreshMs: z.number().min(60_000).default(10 * 60_000),
++  openRouterManagementKeyEnv: z.string().default('OPENROUTER_MANAGEMENT_KEY'),
++  closeRouterBalanceUrl: z.string(),
++})
++
++export const name = 'provider-billing'
++export const inject = ['loader', 'timer', 'sessions', 'sessionProjections']
++
++declare module '@deepseek-ai/cordis' {
++  interface Context {
++    providerBilling: ProviderBillingService
++  }
++}
++
++const LLM_PI_AI_PACKAGE = '@deepseek-ai/dsh-llm-pi-ai'
++const CLOSEROUTER_CREDITS_URL = 'https://api.closerouter.dev/v1/credits'
++const OPENROUTER_API = 'https://openrouter.ai/api/v1'
++const SEVENAPI_API = 'https://7api.st/v1'
++const REQUEST_TIMEOUT_MS = 5_000
++const MANAGEMENT_KEY_MISS_TTL_MS = 10 * 60_000
++const RECOMPUTE_DEBOUNCE_MS = 250
++
++/** One llm-pi-ai route with a recognized billing API. */
++interface RouteProfile {
++  route: string
++  displayName: string
++  kind: BillingKind
++  apiKeyEnv?: string
++  baseURL?: string
++}
++
++/** Read the login Keychain entry `service` for the current user (macOS only); absent on any failure. */
++function readKeychain(service: string): Promise<string | undefined> {
++  return new Promise((resolve) => {
++    execFile(
++      '/usr/bin/security',
++      ['find-generic-password', '-a', userInfo().username, '-s', service, '-w'],
++      { timeout: 3_000 },
++      (error, stdout) => {
++        const key = error === null ? String(stdout).trim() : ''
++        resolve(key === '' ? undefined : key)
++      },
++    )
++  })
++}
++
++/** Host Remote and poller behind the composer's billing pill. */
++export class ProviderBillingService extends TypertRemoteService {
++  static inject = ['loader', 'timer', 'sessions', 'sessionProjections']
++
++  private readonly lifetime = new AbortController()
++  private readonly listeners = new Set<() => void>()
++  private routes = new Map<string, RouteBilling>()
++  private readonly prices = new Map<BillingKind, Map<string, TokenPrices>>()
++  private sessionCosts: Record<string, SessionCostView> = {}
++  private frame: BillingFrame = { routes: {}, sessionCosts: {}, at: 0 }
++  private readonly coldViews = new Map<SessionId, SessionCostProjection | null>()
++  private recomputeTimer: ReturnType<typeof setTimeout> | undefined
++  private recomputing = false
++  private recomputeAgain = false
++  private managementKey: string | undefined
++  private managementKeyMissAt = 0
++
++  /**
++   * @param ctx - Host context carrying the loader, timer, session store and projection registry.
++   * @param config - poll periods and credential references.
++   */
++  constructor(ctx: Context, private readonly config: Config) {
++    super(ctx, 'providerBilling')
++    ctx.effect(() => ctx.sessionProjections.register(sessionCostProjectionDefinition), 'provider-billing: sessionCost projection')
++    ctx.effect(() => ctx.sessionProjections.onChanged((_session, key) => {
++      if (key === 'sessionCost') this.scheduleRecompute()
++    }), 'provider-billing: cost changes')
++    ctx.effect(() => ctx.on('session/event', (_session, event) => {
++      if (event.type === 'request/header' || event.type === 'subagent/catalog') this.scheduleRecompute()
++    }), 'provider-billing: session activity')
++    ctx.effect(() => () => {
++      this.lifetime.abort()
++      if (this.recomputeTimer !== undefined) clearTimeout(this.recomputeTimer)
++      for (const listener of this.listeners) listener()
++    }, 'provider-billing: lifetime')
++    ctx.interval(() => { void this.refreshBalances() }, config.balanceRefreshMs)
++    ctx.interval(() => { void this.refreshPrices() }, config.priceRefreshMs)
++    void this.refreshPrices().then(() => this.refreshBalances())
++    this.scheduleRecompute()
++  }
++
++  /** The current frame: routes, session costs, and when it was computed. */
++  @Remote
++  snapshot(): Promise<BillingFrame> {
++    return Promise.resolve(this.frame)
++  }
++
++  /**
++   * The current frame now and again after every change.
++   * @param signal - the carrier's cancellation.
++   */
++  @Remote({ mode: 'stream' })
++  async *watch(signal: AbortSignal): AsyncIterable<BillingFrame> {
++    let update = Promise.withResolvers<void>()
++    const changed = (): void => { update.resolve() }
++    this.listeners.add(changed)
++    signal.addEventListener('abort', changed, { once: true })
++    this.scheduleRecompute()
++    try {
++      while (!signal.aborted && !this.lifetime.signal.aborted) {
++        yield this.frame
++        await update.promise
++        update = Promise.withResolvers<void>()
++      }
++    } finally {
++      this.listeners.delete(changed)
++      signal.removeEventListener('abort', changed)
++    }
++  }
++
++  /** Recompute every live session's cost soon, coalescing bursts of changes. */
++  private scheduleRecompute(): void {
++    if (this.lifetime.signal.aborted || this.recomputeTimer !== undefined) return
++    const timer = setTimeout(() => {
++      this.recomputeTimer = undefined
++      void this.recompute()
++    }, RECOMPUTE_DEBOUNCE_MS)
++    timer.unref?.()
++    this.recomputeTimer = timer
++  }
++
++  private publish(): void {
++    const routes: Record<string, RouteBilling> = {}
++    for (const [route, billing] of this.routes) routes[route] = billing
++    this.frame = { routes, sessionCosts: this.sessionCosts, at: Date.now() }
++    for (const listener of this.listeners) listener()
++  }
++
++  // ── routes and credentials ───────────────────────────────────────────────
++
++  /** Every llm-pi-ai route whose endpoint host or credential name names a billing API. */
++  private routeProfiles(): RouteProfile[] {
++    const profiles: RouteProfile[] = []
++    for (const entry of this.ctx.loader.entries()) {
++      if (entry.options.name !== LLM_PI_AI_PACKAGE) continue
++      const fiber = entry.fiber
++      if (fiber === undefined || fiber.state !== FiberState.ACTIVE) continue
++      const providers: unknown = asRecord(fiber.config)?.providers
++      const volatile = asRecord(providers)
++      const snapshot = typeof volatile?.get === 'function' ? (volatile.get as () => unknown)() : providers
++      const dict = asRecord(snapshot)
++      if (dict === undefined) continue
++      for (const [route, raw] of Object.entries(dict)) {
++        const profile = asRecord(raw)
++        if (profile === undefined) continue
++        const apiKeyEnv = typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : undefined
++        const baseURL = typeof profile.baseURL === 'string' ? profile.baseURL : undefined
++        const kind = detectKind(baseURL, apiKeyEnv)
++        if (kind === undefined) continue
++        const displayName = typeof profile.displayName === 'string' && profile.displayName !== '' ? profile.displayName : route
++        profiles.push({
++          route,
++          displayName,
++          kind,
++          ...apiKeyEnv === undefined ? {} : { apiKeyEnv },
++          ...baseURL === undefined ? {} : { baseURL },
++        })
++      }
++    }
++    return profiles
++  }
++
++  /** The secret a credential reference resolves to, through the seam (else the launch environment); never logged. */
++  private async resolveSecret(ref: string | undefined): Promise<string | undefined> {
++    if (ref === undefined || !isCredentialRefName(ref)) return undefined
++    const branded = credentialRef(ref)
++    const credentials = this.ctx.get('credentials')
++    const value = credentials !== undefined
++      ? (await credentials.resolve(branded))?.value
++      : launchEnvironmentOf(this.ctx).get(branded)?.value
++    return value !== undefined && value.trim() !== '' ? value.trim() : undefined
++  }
++
++  /** The OpenRouter management key: the credential seam first, then the macOS login Keychain. */
++  private async managementKeyValue(): Promise<string | undefined> {
++    const direct = await this.resolveSecret(this.config.openRouterManagementKeyEnv)
++    if (direct !== undefined) return direct
++    if (process.platform !== 'darwin') return undefined
++    if (this.managementKey !== undefined) return this.managementKey
++    if (Date.now() - this.managementKeyMissAt < MANAGEMENT_KEY_MISS_TTL_MS) return undefined
++    const key = await readKeychain(this.config.openRouterManagementKeyEnv)
++    if (key === undefined) {
++      this.managementKeyMissAt = Date.now()
++      return undefined
++    }
++    this.managementKey = key
++    return key
++  }
++
++  // ── HTTP ─────────────────────────────────────────────────────────────────
++
++  /** Authenticated JSON GET; absent on any failure (never thrown, never logged with the key). */
++  private async getJson(url: string, key: string): Promise<unknown> {
++    if (this.lifetime.signal.aborted) return undefined
++    try {
++      const headers = new Headers({ accept: 'application/json', authorization: `Bearer ${key}` })
++      for (const [name, value] of Object.entries(attributionHeaders())) headers.set(name, value)
++      const response = await fetch(url, {
++        method: 'GET',
++        headers,
++        redirect: 'error',
++        signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
++      })
++      if (!response.ok) {
++        this.ctx.logger.debug('provider-billing: %s answered HTTP %d', url, response.status)
++        return undefined
++      }
++      return await response.json()
++    } catch (error) {
++      if (!this.lifetime.signal.aborted) {
++        this.ctx.logger.debug('provider-billing: %s unreachable: %s', url, error instanceof Error ? error.message : String(error))
++      }
++      return undefined
++    }
++  }
++
++  private async fetchBalance(profile: RouteProfile, key: string): Promise<number | undefined> {
++    switch (profile.kind) {
++      case 'closerouter':
++        return parseCloseRouterBalance(await this.getJson(this.config.closeRouterBalanceUrl ?? CLOSEROUTER_CREDITS_URL, key))
++      case 'sevenapi':
++        return parseSevenApiBalance(await this.getJson(`${SEVENAPI_API}/balance`, key))
++      case 'openrouter': {
++        const managementKey = await this.managementKeyValue()
++        if (managementKey !== undefined) {
++          const credits = parseOpenRouterCredits(await this.getJson(`${OPENROUTER_API}/credits`, managementKey))
++          if (credits !== undefined) return credits
++        }
++        // A key without a credit limit reports null: the balance is then unknown, not $0.
++        return parseOpenRouterKeyLimit(await this.getJson(`${OPENROUTER_API}/key`, key))
++      }
++      case 'muse':
++        return undefined
++    }
++  }
++
++  private async fetchMuse(profile: RouteProfile, key: string): Promise<MuseUsage | undefined> {
++    if (profile.baseURL === undefined) return undefined
++    let url: string
++    try {
++      url = museUsageUrl(profile.baseURL)
++    } catch {
++      return undefined
++    }
++    return parseMuseUsage(await this.getJson(url, key))
++  }
++
++  /** Poll every recognized route whose credential resolves; a failed poll hides the figure rather than keeping a stale one. */
++  private async refreshBalances(): Promise<void> {
++    const profiles = this.routeProfiles()
++    const next = new Map<string, RouteBilling>()
++    await Promise.all(profiles.map(async (profile) => {
++      const key = await this.resolveSecret(profile.apiKeyEnv)
++      const row: RouteBilling = {
++        route: profile.route,
++        displayName: profile.displayName,
++        kind: profile.kind,
++        configured: key !== undefined,
++      }
++      if (key !== undefined) {
++        if (profile.kind === 'muse') {
++          const usage = await this.fetchMuse(profile, key)
++          if (usage !== undefined) {
++            row.muse = usage
++            row.checkedAt = Date.now()
++          }
++        } else {
++          const usd = await this.fetchBalance(profile, key)
++          if (usd !== undefined) {
++            row.balanceUsd = usd
++            row.checkedAt = Date.now()
++          }
++        }
++      }
++      next.set(profile.route, row)
++    }))
++    if (this.lifetime.signal.aborted) return
++    this.routes = next
++    this.publish()
++    this.scheduleRecompute()
++  }
++
++  /** Refresh the 7api and OpenRouter price lists; a failed fetch keeps the previous list. */
++  private async refreshPrices(): Promise<void> {
++    const profiles = this.routeProfiles()
++    const byKind = new Map<BillingKind, RouteProfile>()
++    for (const profile of profiles) if (!byKind.has(profile.kind)) byKind.set(profile.kind, profile)
++    const sevenapi = byKind.get('sevenapi')
++    if (sevenapi !== undefined) {
++      const key = await this.resolveSecret(sevenapi.apiKeyEnv)
++      if (key !== undefined) {
++        const prices = parseSevenApiPrices(await this.getJson(`${SEVENAPI_API}/models`, key))
++        if (prices.size > 0) this.prices.set('sevenapi', prices)
++      }
++    }
++    const openrouter = byKind.get('openrouter')
++    if (openrouter !== undefined) {
++      const key = await this.resolveSecret(openrouter.apiKeyEnv)
++      if (key !== undefined) {
++        const prices = parseOpenRouterPrices(await this.getJson(`${OPENROUTER_API}/models`, key))
++        if (prices.size > 0) this.prices.set('openrouter', prices)
++      }
++    }
++    if (!this.lifetime.signal.aborted) this.scheduleRecompute()
++  }
++
++  // ── session cost ─────────────────────────────────────────────────────────
++
++  /**
++   * Price one session's buckets. A model whose every call reported a cost
++   * sums those costs; a model with any uncosted call is priced from its
++   * provider's price list as a whole, and without a price the figure is
++   * incomplete and therefore hidden, never partial.
++   */
++  private price(view: SessionCostProjection): { usd: number; complete: boolean; steps: number } {
++    let usd = 0
++    let complete = true
++    let steps = 0
++    for (const [route, models] of Object.entries(view.models)) {
++      for (const [model, buckets] of Object.entries(models)) {
++        steps += buckets.steps
++        if (buckets.steps === 0) continue
++        if (buckets.uncostedSteps === 0) {
++          usd += buckets.reportedUsd
++          continue
++        }
++        const kind = this.routes.get(route)?.kind ?? this.routeProfiles().find(profile => profile.route === route)?.kind
++        const table = kind === undefined ? undefined : this.prices.get(kind)
++        const prices = table?.get(model)
++        if (prices === undefined) {
++          complete = false
++          continue
++        }
++        usd += costOfBuckets(buckets, prices)
++      }
++    }
++    return { usd, complete, steps }
++  }
++
++  private liveView(session: Session): SessionCostProjection | undefined {
++    return this.ctx.sessionProjections.snapshot(session, ['sessionCost']).values.sessionCost
++  }
++
++  /** A session's `sessionCost` view: live when attached, else the persisted projection (cached, since a cold log does not change). */
++  private async viewOf(id: SessionId): Promise<SessionCostProjection | undefined> {
++    const live = this.ctx.sessions.get(id)
++    if (live !== undefined) return this.liveView(live)
++    const cached = this.coldViews.get(id)
++    if (cached !== undefined) return cached ?? undefined
++    const query = this.ctx.get('sessionQuery')
++    if (query === undefined) return undefined
++    try {
++      using observation = await query.observeSession(id, { signal: this.lifetime.signal })
++      const view = observation.projections?.values.sessionCost
++      this.coldViews.set(id, view ?? null)
++      return view
++    } catch {
++      return undefined
++    }
++  }
++
++  /** One session's cost: its own buckets plus every catalog descendant's. */
++  private async costOf(session: Session): Promise<SessionCostView> {
++    const views: SessionCostProjection[] = []
++    const own = this.liveView(session)
++    if (own !== undefined) views.push(own)
++    const subagents = this.ctx.get('subagents')
++    if (subagents !== undefined) {
++      try {
++        for (const entry of await subagents.listDescendants(session.id, this.lifetime.signal)) {
++          if (entry.kind !== 'child') continue
++          const view = await this.viewOf(entry.id)
++          if (view !== undefined) views.push(view)
++        }
++      } catch {
++        // No catalog or query service: the session's own cost still counts.
++      }
++    }
++    let usd = 0
++    let complete = true
++    let steps = 0
++    for (const view of views) {
++      const priced = this.price(view)
++      usd += priced.usd
++      steps += priced.steps
++      if (!priced.complete) complete = false
++    }
++    return { usd, complete, steps, sessions: views.length }
++  }
++
++  private async recompute(): Promise<void> {
++    if (this.recomputing) {
++      this.recomputeAgain = true
++      return
++    }
++    this.recomputing = true
++    try {
++      const next: Record<string, SessionCostView> = {}
++      for (const session of this.ctx.sessions.list()) {
++        if (this.lifetime.signal.aborted) return
++        next[session.id] = await this.costOf(session)
++      }
++      if (JSON.stringify(next) !== JSON.stringify(this.sessionCosts)) {
++        this.sessionCosts = next
++        this.publish()
++      }
++    } catch (error) {
++      if (!this.lifetime.signal.aborted) {
++        this.ctx.logger.debug('provider-billing: session cost recompute failed: %s', error instanceof Error ? error.message : String(error))
++      }
++    } finally {
++      this.recomputing = false
++      if (this.recomputeAgain) {
++        this.recomputeAgain = false
++        this.scheduleRecompute()
++      }
++    }
++  }
++}
++
++/**
++ * Mount the `providerBilling` Remote and its poller.
++ * @param ctx - Host context.
++ * @param config - validated plugin configuration.
++ */
++export function apply(ctx: Context, config: Config): void {
++  ctx.plugin(ProviderBillingService, config)
++}
+diff --git a/packages/llm/provider-billing/src/providers.ts b/packages/llm/provider-billing/src/providers.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5a6502ce5b6bc0d35951d09c5d9d4c8b8d2678c7
+--- /dev/null
++++ b/packages/llm/provider-billing/src/providers.ts
+@@ -0,0 +1,202 @@
++/**
++ * Pure helpers: which billing API a route speaks, how each reply is read, and
++ * how token buckets are priced. No I/O here, so every rule is unit-testable.
++ * @module @deepseek-ai/dsh-provider-billing/providers
++ */
++
++import type { BillingKind, MuseQuota, MuseUsage, SessionCostModelBuckets, TokenPrices } from './types.ts'
++
++/** The credential reference that marks a muse forwarder route. */
++export const MUSE_API_KEY_ENV = 'MUSE_FORWARDER_KEY'
++
++const CLOSEROUTER_BALANCE_KEYS = ['total_credits', 'balance', 'remaining', 'remaining_usd', 'credits'] as const
++
++/** Plain objects only. */
++export function asRecord(value: unknown): Record<string, unknown> | undefined {
++  return typeof value === 'object' && value !== null && !Array.isArray(value)
++    ? value as Record<string, unknown>
++    : undefined
++}
++
++/** JSON numbers and numeric strings; anything else is absent. */
++export function toFiniteNumber(value: unknown): number | undefined {
++  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
++  if (typeof value === 'string' && value.trim() !== '') {
++    const parsed = Number(value)
++    return Number.isFinite(parsed) ? parsed : undefined
++  }
++  return undefined
++}
++
++/**
++ * Recognize the billing API behind a route from its endpoint host, or the
++ * muse forwarder from its credential name (its host is deployment-specific).
++ * @param baseURL - the route's `baseURL`, when configured.
++ * @param apiKeyEnv - the route's `apiKeyEnv`, when configured.
++ * @returns the billing kind, or absent for a route with no known billing API.
++ */
++export function detectKind(baseURL: string | undefined, apiKeyEnv: string | undefined): BillingKind | undefined {
++  if (apiKeyEnv === MUSE_API_KEY_ENV) return 'muse'
++  if (baseURL === undefined) return undefined
++  let host: string
++  try {
++    host = new URL(baseURL).host
++  } catch {
++    return undefined
++  }
++  if (host === 'api.closerouter.dev') return 'closerouter'
++  if (host === 'openrouter.ai') return 'openrouter'
++  if (host === '7api.st') return 'sevenapi'
++  return undefined
++}
++
++/**
++ * CloseRouter `GET /v1/credits`: the first finite value among the known
++ * balance keys, descending into `data`. `total_credits` is the available
++ * balance; `total_usage` is lifetime spend and is ignored.
++ */
++export function parseCloseRouterBalance(body: unknown): number | undefined {
++  const record = asRecord(body)
++  if (record === undefined) return toFiniteNumber(body)
++  for (const key of CLOSEROUTER_BALANCE_KEYS) {
++    const balance = toFiniteNumber(record[key])
++    if (balance !== undefined) return balance
++  }
++  return 'data' in record ? parseCloseRouterBalance(record.data) : undefined
++}
++
++/** OpenRouter `GET /api/v1/credits` (management key): `total_credits - total_usage`, both required. */
++export function parseOpenRouterCredits(body: unknown): number | undefined {
++  const data = asRecord(asRecord(body)?.data)
++  const total = toFiniteNumber(data?.total_credits)
++  const usage = toFiniteNumber(data?.total_usage)
++  return total === undefined || usage === undefined ? undefined : total - usage
++}
++
++/** OpenRouter `GET /api/v1/key` (API key): `data.limit_remaining`; `null` (no credit limit) means unknown. */
++export function parseOpenRouterKeyLimit(body: unknown): number | undefined {
++  return toFiniteNumber(asRecord(asRecord(body)?.data)?.limit_remaining)
++}
++
++/** 7api `GET /v1/balance`: `balance_usd`. */
++export function parseSevenApiBalance(body: unknown): number | undefined {
++  return toFiniteNumber(asRecord(body)?.balance_usd)
++}
++
++/** 7api `GET /v1/models`: one price per million for every token kind, the cache read its own. */
++export function parseSevenApiPrices(body: unknown): Map<string, TokenPrices> {
++  const prices = new Map<string, TokenPrices>()
++  const data = asRecord(body)?.data
++  if (!Array.isArray(data)) return prices
++  for (const entry of data) {
++    const row = asRecord(entry)
++    const pricing = asRecord(row?.pricing)
++    const id = row?.id
++    const price = toFiniteNumber(pricing?.price_usd_per_mtok)
++    const cacheRead = toFiniteNumber(pricing?.cache_read_usd_per_mtok)
++    if (typeof id !== 'string' || price === undefined || cacheRead === undefined) continue
++    prices.set(id, { input: price, output: price, cacheWrite: price, cacheRead })
++  }
++  return prices
++}
++
++/** OpenRouter `GET /api/v1/models`: per-token USD strings become per-million prices; `-1` (variable) entries are skipped. */
++export function parseOpenRouterPrices(body: unknown): Map<string, TokenPrices> {
++  const prices = new Map<string, TokenPrices>()
++  const data = asRecord(body)?.data
++  if (!Array.isArray(data)) return prices
++  const perMillion = (value: unknown): number | undefined => {
++    const perToken = toFiniteNumber(value)
++    return perToken === undefined || perToken < 0 ? undefined : perToken * 1_000_000
++  }
++  for (const entry of data) {
++    const row = asRecord(entry)
++    const pricing = asRecord(row?.pricing)
++    const id = row?.id
++    const input = perMillion(pricing?.prompt)
++    const output = perMillion(pricing?.completion)
++    if (typeof id !== 'string' || input === undefined || output === undefined) continue
++    prices.set(id, {
++      input,
++      output,
++      cacheRead: perMillion(pricing?.input_cache_read) ?? input,
++      cacheWrite: perMillion(pricing?.input_cache_write) ?? input,
++    })
++  }
++  return prices
++}
++
++/** Price every token of the buckets, as an estimate for calls that reported no cost. */
++export function costOfBuckets(buckets: SessionCostModelBuckets, prices: TokenPrices): number {
++  return (
++    buckets.inputTokens * prices.input
++    + buckets.outputTokens * prices.output
++    + buckets.cacheReadTokens * prices.cacheRead
++    + buckets.cacheWriteTokens * prices.cacheWrite
++  ) / 1_000_000
++}
++
++/** `/usage` lives at the root of the forwarder host, not under `/v1`. */
++export function museUsageUrl(baseURL: string): string {
++  return `${new URL(baseURL).origin}/usage`
++}
++
++/** `5h window`, `45m window`, `1h 30m window`; `Window` when the duration is unknown. */
++export function windowLabel(minutes: number | undefined): string {
++  const whole = minutes === undefined || !Number.isFinite(minutes) ? 0 : Math.round(minutes)
++  if (whole <= 0) return 'Window'
++  const hours = Math.floor(whole / 60)
++  const rest = whole % 60
++  if (hours === 0) return `${String(rest)}m window`
++  return rest === 0 ? `${String(hours)}h window` : `${String(hours)}h ${String(rest)}m window`
++}
++
++function isoFromUnixSeconds(value: unknown): string | undefined {
++  const seconds = toFiniteNumber(value)
++  if (seconds === undefined) return undefined
++  const date = new Date(seconds * 1000)
++  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
++}
++
++function parseQuota(value: unknown): MuseQuota | undefined {
++  const quota = asRecord(value)
++  const percent = toFiniteNumber(quota?.used_percent)
++  if (percent === undefined) return undefined
++  const resetAt = isoFromUnixSeconds(quota?.resets_at)
++  return {
++    usedRatio: Math.max(0, Math.min(percent / 100, 1)),
++    ...resetAt === undefined ? {} : { resetAt },
++  }
++}
++
++function nonNegative(value: unknown): number {
++  const number = toFiniteNumber(value)
++  return number === undefined || number < 0 ? 0 : number
++}
++
++/** The forwarder's `GET /usage` reply; absent unless both quota windows report a used percentage. */
++export function parseMuseUsage(body: unknown): MuseUsage | undefined {
++  const record = asRecord(body)
++  const subscription = asRecord(record?.subscription)
++  const weekly = parseQuota(subscription?.weekly)
++  const windowRecord = asRecord(subscription?.window)
++  const window = parseQuota(windowRecord)
++  if (weekly === undefined || window === undefined) return undefined
++  const identity = asRecord(record?.identity)
++  const version = identity?.muse_version
++  const tokens = asRecord(record?.tokens)
++  const requests = toFiniteNumber(record?.requests)
++  return {
++    weekly,
++    window,
++    windowLabel: windowLabel(toFiniteNumber(windowRecord?.window_duration_mins)),
++    ...typeof version === 'string' && version !== '' ? { version } : {},
++    tokens: {
++      input: nonNegative(tokens?.input),
++      output: nonNegative(tokens?.output),
++      cached: nonNegative(tokens?.cached),
++      reasoning: nonNegative(tokens?.reasoning),
++    },
++    ...requests === undefined ? {} : { requests },
++  }
++}
+diff --git a/packages/llm/provider-billing/src/types.ts b/packages/llm/provider-billing/src/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0be6229ef41aa154e7fc6ae110f8dc89fc25f05
+--- /dev/null
++++ b/packages/llm/provider-billing/src/types.ts
+@@ -0,0 +1,100 @@
++/**
++ * Wire and projection types of the provider-billing plugin. Client-safe:
++ * no runtime imports.
++ * @module @deepseek-ai/dsh-provider-billing/types
++ */
++
++/** Which billing API a provider route speaks, recognized from its endpoint host or credential name. */
++export type BillingKind = 'closerouter' | 'openrouter' | 'sevenapi' | 'muse'
++
++/** One quota window of the muse subscription. */
++export interface MuseQuota {
++  /** Fraction used, clamped to 0..1. */
++  usedRatio: number
++  /** ISO time the window resets, when the forwarder reported one. */
++  resetAt?: string
++}
++
++/** The muse forwarder's `GET /usage` reply, normalized. */
++export interface MuseUsage {
++  weekly: MuseQuota
++  window: MuseQuota
++  /** Human label of the short window, e.g. `5h window`. */
++  windowLabel: string
++  version?: string
++  tokens: { input: number; output: number; cached: number; reasoning: number }
++  requests?: number
++}
++
++/** Billing facts for one configured provider route. */
++export interface RouteBilling {
++  /** The llm-pi-ai route key. */
++  route: string
++  /** Name shown next to the figures. */
++  displayName: string
++  kind: BillingKind
++  /** Whether the route's credential resolved; nothing is polled without it. */
++  configured: boolean
++  /** Account balance in USD; absent while unknown or after a failed poll. */
++  balanceUsd?: number
++  /** Subscription usage for a `muse` route; absent while unknown or after a failed poll. */
++  muse?: MuseUsage
++  /** Epoch milliseconds of the last successful read. */
++  checkedAt?: number
++}
++
++/** Cost of one session including every subagent session under it. */
++export interface SessionCostView {
++  /** USD summed over every priced call. */
++  usd: number
++  /** Whether every billed call could be priced; the figure is hidden otherwise. */
++  complete: boolean
++  /** Calls that reported usage across the summed sessions. */
++  steps: number
++  /** Sessions summed: the session itself plus its descendants. */
++  sessions: number
++}
++
++/** One frame of the `providerBilling.watch` stream. */
++export interface BillingFrame {
++  /** Every llm-pi-ai route whose endpoint has a known billing API, keyed by route. */
++  routes: Record<string, RouteBilling>
++  /** Cost per live session id. */
++  sessionCosts: Record<string, SessionCostView>
++  /** Epoch milliseconds the frame was computed. */
++  at: number
++}
++
++/** Token and cost buckets of one provider/model pair within one session. */
++export interface SessionCostModelBuckets {
++  inputTokens: number
++  outputTokens: number
++  cacheReadTokens: number
++  cacheWriteTokens: number
++  /** Sum of the gateway-reported costs of the calls that carried one. */
++  reportedUsd: number
++  /** Calls whose usage carried no cost. */
++  uncostedSteps: number
++  /** Calls that reported usage. */
++  steps: number
++}
++
++/** Client view of the `sessionCost` projection: buckets by route, then by model id. */
++export interface SessionCostProjection {
++  models: Record<string, Record<string, SessionCostModelBuckets>>
++}
++
++/** USD per million tokens for one model. */
++export interface TokenPrices {
++  input: number
++  output: number
++  cacheRead: number
++  cacheWrite: number
++}
++
++declare module '@deepseek-ai/dsh-session-projection/types' {
++  interface SessionProjectionMap {
++    /** Provider-reported cost and token buckets per route and model across the durable log. */
++    sessionCost: SessionCostProjection
++  }
++}
+diff --git a/packages/llm/provider-billing/tests/cost-projection.spec.ts b/packages/llm/provider-billing/tests/cost-projection.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5d79f6654d3d739a3bc0507f3fffd27578a64325
+--- /dev/null
++++ b/packages/llm/provider-billing/tests/cost-projection.spec.ts
+@@ -0,0 +1,94 @@
++import { describe, expect, it } from 'vitest'
++import type { SessionEvent } from '@deepseek-ai/dsh-session'
++import { bucketsFrom, sessionCostProjectionDefinition as unit } from '../src/cost-projection.ts'
++
++const header = (provider: string, model: string): SessionEvent => ({
++  type: 'request/header',
++  seq: 1,
++  time: 1,
++  data: { header: { config: { provider, model } }, reason: 'start' },
++} as unknown as SessionEvent)
++
++const message = (turn: number, step: number, provider: string, model: string, usage: Record<string, number>): SessionEvent => ({
++  type: 'assistant/message',
++  seq: 2,
++  time: 2,
++  data: {
++    turn,
++    step,
++    message: { id: 'm', role: 'assistant', content: [], source: { kind: 'model', provider, model } },
++    stream: [],
++    usage: { inputTokens: 0, outputTokens: 0, ...usage },
++  },
++} as unknown as SessionEvent)
++
++const attempt = (turn: number, step: number, usage: Record<string, number>): SessionEvent => ({
++  type: 'assistant/attempt',
++  seq: 3,
++  time: 3,
++  data: {
++    turn,
++    step,
++    stream: [{ type: 'chunk', time: 3, chunk: { type: 'usage', usage: { inputTokens: 0, outputTokens: 0, ...usage } } }],
++  },
++} as unknown as SessionEvent)
++
++const retryStarted = (turn: number, step: number): SessionEvent => ({
++  type: 'llm/retry-started',
++  seq: 4,
++  time: 4,
++  data: { turn, step },
++} as unknown as SessionEvent)
++
++describe('bucketsFrom', () => {
++  it('counts a call without a reported cost as uncosted, never as $0', () => {
++    expect(bucketsFrom({ inputTokens: 10, outputTokens: 5 })).toEqual({
++      inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, reportedUsd: 0, uncostedSteps: 1, steps: 1,
++    })
++    expect(bucketsFrom({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 3, cost: 0.002 })).toEqual({
++      inputTokens: 10, outputTokens: 5, cacheReadTokens: 3, cacheWriteTokens: 0, reportedUsd: 0.002, uncostedSteps: 0, steps: 1,
++    })
++  })
++})
++
++describe('sessionCost projection', () => {
++  it('sums calls per route and model and keeps the request header route for attempts', () => {
++    let state = unit.init()
++    state = unit.apply(state, header('closerouter', 'openai/gpt-6-astra'))
++    state = unit.apply(state, message(1, 1, 'closerouter', 'openai/gpt-6-astra', { inputTokens: 100, outputTokens: 10, cost: 0.001 }))
++    state = unit.apply(state, attempt(1, 2, { inputTokens: 50, outputTokens: 5 }))
++    state = unit.apply(state, message(2, 1, 'sevenapi', 'gpt-5.5', { inputTokens: 20, outputTokens: 2 }))
++    const view = unit.wire.view(state)
++    expect(view.models.closerouter?.['openai/gpt-6-astra']).toEqual({
++      inputTokens: 150, outputTokens: 15, cacheReadTokens: 0, cacheWriteTokens: 0, reportedUsd: 0.001, uncostedSteps: 1, steps: 2,
++    })
++    expect(view.models.sevenapi?.['gpt-5.5']?.uncostedSteps).toBe(1)
++  })
++
++  it('replaces the sample of the same turn and step instead of adding it twice', () => {
++    let state = unit.init()
++    state = unit.apply(state, message(1, 1, 'closerouter', 'm', { inputTokens: 100, outputTokens: 10, cost: 0.001 }))
++    state = unit.apply(state, message(1, 1, 'closerouter', 'm', { inputTokens: 120, outputTokens: 12, cost: 0.0012 }))
++    expect(unit.wire.view(state).models.closerouter?.m).toEqual({
++      inputTokens: 120, outputTokens: 12, cacheReadTokens: 0, cacheWriteTokens: 0, reportedUsd: 0.0012, uncostedSteps: 0, steps: 1,
++    })
++  })
++
++  it('adds a retried attempt after llm/retry-started reopens the slot', () => {
++    let state = unit.init()
++    state = unit.apply(state, header('closerouter', 'm'))
++    state = unit.apply(state, attempt(1, 1, { inputTokens: 100, outputTokens: 0 }))
++    state = unit.apply(state, retryStarted(1, 1))
++    state = unit.apply(state, message(1, 1, 'closerouter', 'm', { inputTokens: 100, outputTokens: 10, cost: 0.001 }))
++    expect(unit.wire.view(state).models.closerouter?.m?.steps).toBe(2)
++    expect(unit.wire.view(state).models.closerouter?.m?.inputTokens).toBe(200)
++  })
++
++  it('returns the same state for unrelated events and validates its own state', () => {
++    const state = unit.init()
++    const next = unit.apply(state, { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } } as unknown as SessionEvent)
++    expect(next).toBe(state)
++    expect(unit.stateSchema.parse(state)).toEqual(state)
++    expect(unit.wire.viewSchema.parse(unit.wire.view(state))).toEqual({ models: {} })
++  })
++})
+diff --git a/packages/llm/provider-billing/tests/providers.spec.ts b/packages/llm/provider-billing/tests/providers.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..1b635f99301881445420a15fbeccd2653e1c2fc5
+--- /dev/null
++++ b/packages/llm/provider-billing/tests/providers.spec.ts
+@@ -0,0 +1,147 @@
++import { describe, expect, it } from 'vitest'
++import {
++  costOfBuckets,
++  detectKind,
++  museUsageUrl,
++  parseCloseRouterBalance,
++  parseMuseUsage,
++  parseOpenRouterCredits,
++  parseOpenRouterKeyLimit,
++  parseOpenRouterPrices,
++  parseSevenApiBalance,
++  parseSevenApiPrices,
++  toFiniteNumber,
++  windowLabel,
++} from '../src/providers.ts'
++
++describe('detectKind', () => {
++  it('recognizes the billing API from the endpoint host', () => {
++    expect(detectKind('https://api.closerouter.dev/v1', 'CLOSEROUTER_API_KEY')).toBe('closerouter')
++    expect(detectKind('https://api.closerouter.dev', 'CLOSEROUTER_API_KEY')).toBe('closerouter')
++    expect(detectKind('https://7api.st/v1', 'SEVENAPI_API_KEY')).toBe('sevenapi')
++    expect(detectKind('https://7api.st', 'SEVENAPI_API_KEY')).toBe('sevenapi')
++    expect(detectKind('https://openrouter.ai/api/v1', 'OPENROUTER_API_KEY')).toBe('openrouter')
++  })
++
++  it('recognizes the muse forwarder by its credential name, whatever its host', () => {
++    expect(detectKind('https://relay.example:8788/v1', 'MUSE_FORWARDER_KEY')).toBe('muse')
++  })
++
++  it('knows no billing API for other hosts or unparseable endpoints', () => {
++    expect(detectKind('https://api.deepseek.com/anthropic', 'DEEPSEEK_API_KEY')).toBeUndefined()
++    expect(detectKind('not a url', 'X')).toBeUndefined()
++    expect(detectKind(undefined, undefined)).toBeUndefined()
++  })
++})
++
++describe('balance parsers', () => {
++  it('reads CloseRouter total_credits, ignoring total_usage, with or without a data envelope', () => {
++    expect(parseCloseRouterBalance({ data: { total_credits: 107.3, total_usage: 779.9 } })).toBe(107.3)
++    expect(parseCloseRouterBalance({ total_credits: '12.5' })).toBe(12.5)
++    expect(parseCloseRouterBalance({ balance: 3 })).toBe(3)
++    expect(parseCloseRouterBalance({ data: {} })).toBeUndefined()
++    expect(parseCloseRouterBalance(null)).toBeUndefined()
++  })
++
++  it('derives the OpenRouter balance from credits minus usage, both required', () => {
++    expect(parseOpenRouterCredits({ data: { total_credits: 275, total_usage: 273.64 } })).toBeCloseTo(1.36, 6)
++    expect(parseOpenRouterCredits({ data: { total_credits: 275 } })).toBeUndefined()
++  })
++
++  it('reads the OpenRouter key limit and treats null as unknown', () => {
++    expect(parseOpenRouterKeyLimit({ data: { limit_remaining: 4.5 } })).toBe(4.5)
++    expect(parseOpenRouterKeyLimit({ data: { limit_remaining: null } })).toBeUndefined()
++  })
++
++  it('reads the 7api balance', () => {
++    expect(parseSevenApiBalance({ object: 'balance', currency: 'USD', balance_usd: 0.3369 })).toBe(0.3369)
++    expect(parseSevenApiBalance({ object: 'balance' })).toBeUndefined()
++  })
++
++  it('accepts numeric strings and rejects everything else', () => {
++    expect(toFiniteNumber(' 2.5 ')).toBe(2.5)
++    expect(toFiniteNumber('')).toBeUndefined()
++    expect(toFiniteNumber('abc')).toBeUndefined()
++    expect(toFiniteNumber(Number.NaN)).toBeUndefined()
++    expect(toFiniteNumber(true)).toBeUndefined()
++  })
++})
++
++describe('price lists', () => {
++  it('maps 7api per-million prices with their own cache-read price and skips incomplete rows', () => {
++    const prices = parseSevenApiPrices({ data: [
++      { id: 'gpt-6-astra', pricing: { price_usd_per_mtok: 0.45, cache_read_usd_per_mtok: 0.04 } },
++      { id: 'broken', pricing: { price_usd_per_mtok: 0.45 } },
++      { pricing: { price_usd_per_mtok: 1, cache_read_usd_per_mtok: 1 } },
++    ] })
++    expect(prices.get('gpt-6-astra')).toEqual({ input: 0.45, output: 0.45, cacheWrite: 0.45, cacheRead: 0.04 })
++    expect(prices.size).toBe(1)
++  })
++
++  it('converts OpenRouter per-token strings to per-million and skips variable pricing', () => {
++    const prices = parseOpenRouterPrices({ data: [
++      { id: 'moonshotai/kimi-k3.1-pro', pricing: { prompt: '0.000002', completion: '0.00001', input_cache_read: '0.0000002' } },
++      { id: 'openrouter/auto', pricing: { prompt: '-1', completion: '-1' } },
++    ] })
++    const kimi = prices.get('moonshotai/kimi-k3.1-pro')
++    expect(kimi?.input).toBeCloseTo(2, 9)
++    expect(kimi?.output).toBeCloseTo(10, 9)
++    expect(kimi?.cacheRead).toBeCloseTo(0.2, 9)
++    expect(kimi?.cacheWrite).toBeCloseTo(2, 9)
++    expect(prices.has('openrouter/auto')).toBe(false)
++  })
++
++  it('prices every bucket per million tokens', () => {
++    const usd = costOfBuckets(
++      {
++        inputTokens: 1_000_000, outputTokens: 500_000, cacheReadTokens: 250_000, cacheWriteTokens: 0,
++        reportedUsd: 0, uncostedSteps: 1, steps: 1,
++      },
++      { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 },
++    )
++    expect(usd).toBeCloseTo(2 + 5 + 0.05, 9)
++  })
++})
++
++describe('muse usage', () => {
++  const sample = {
++    identity: { build: '39490bd0', client_id: 'tbh:tui', contributor: true, muse_version: '1.4.13-R6996.1' },
++    observed_at: '2026-10-27T13:55:14Z',
++    requests: 7,
++    subscription: {
++      tier: 'x',
++      weekly: { resets_at: 1793577600, used_percent: 1 },
++      window: { resets_at: 1793124239, used_percent: 3, window_duration_mins: 300 },
++    },
++    tokens: { cached: 89296, input: 157438, output: 2780, reasoning: 1169 },
++  }
++
++  it('normalizes the forwarder reply', () => {
++    expect(parseMuseUsage(sample)).toEqual({
++      weekly: { usedRatio: 0.01, resetAt: '2026-11-02T00:00:00.000Z' },
++      window: { usedRatio: 0.03, resetAt: '2026-10-27T18:03:59.000Z' },
++      windowLabel: '5h window',
++      version: '1.4.13-R6996.1',
++      tokens: { input: 157438, output: 2780, cached: 89296, reasoning: 1169 },
++      requests: 7,
++    })
++  })
++
++  it('clamps percentages and requires both windows', () => {
++    const usage = parseMuseUsage({ subscription: { weekly: { used_percent: '250' }, window: { used_percent: -4 } } })
++    expect(usage?.weekly.usedRatio).toBe(1)
++    expect(usage?.window.usedRatio).toBe(0)
++    expect(usage?.windowLabel).toBe('Window')
++    expect(parseMuseUsage({ subscription: { weekly: { used_percent: 1 } } })).toBeUndefined()
++  })
++
++  it('labels windows and derives the usage URL from the host root', () => {
++    expect(windowLabel(300)).toBe('5h window')
++    expect(windowLabel(60)).toBe('1h window')
++    expect(windowLabel(45)).toBe('45m window')
++    expect(windowLabel(90)).toBe('1h 30m window')
++    expect(windowLabel(undefined)).toBe('Window')
++    expect(museUsageUrl('https://muse.example.test:8788/v1')).toBe('https://muse.example.test:8788/usage')
++    expect(museUsageUrl('http://127.0.0.1:8788/v1/chat')).toBe('http://127.0.0.1:8788/usage')
++  })
++})
+diff --git a/packages/llm/provider-billing/tsconfig.json b/packages/llm/provider-billing/tsconfig.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..acff30f0d99b76de9eb85a0b03bf6d63478ec521
+--- /dev/null
++++ b/packages/llm/provider-billing/tsconfig.json
+@@ -0,0 +1,26 @@
++{
++  "extends": "../../../tsconfig.base.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types"
++  },
++  "include": [
++    "src"
++  ],
++  "references": [
++    { "path": "../../../vendor/cosmokit" },
++    { "path": "../../../vendor/cordis" },
++    { "path": "../../../vendor/loader" },
++    { "path": "../../../vendor/timer" },
++    { "path": "../../../vendor/schemastery" },
++    { "path": "../../typert/protocol" },
++    { "path": "../../llm/llm" },
++    { "path": "../../llm/llm-retry" },
++    { "path": "../../core/session" },
++    { "path": "../../session/session-projection" },
++    { "path": "../../session-query/session-query" },
++    { "path": "../../subagent/subagent" },
++    { "path": "../../credentials/credentials" },
++    { "path": "../../util/launch-environment" }
++  ]
++}
+diff --git a/patches/@earendil-works__pi-ai@1.1.0.patch b/patches/@earendil-works__pi-ai@1.1.0.patch
+index d1a3b542c2d7a57cd29ce3ff510d4077e6be0676..3b100bd9e422e9e929f16632a8776ae301d98955 100644
+--- a/patches/@earendil-works__pi-ai@1.1.0.patch
++++ b/patches/@earendil-works__pi-ai@1.1.0.patch
+@@ -1,5 +1,5 @@
+ diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+-index 38571b31e143e913c2bf59dad73382982e93664a..950e546197d8e84cb3edfca0012939f1db2488d8 100644
++index 38571b31e143e913c2bf59dad73382982e93664a..a7e52d9673dbb4469a906068292cdef3c4ce7352 100644
+ --- a/dist/api/anthropic-messages.js
+ +++ b/dist/api/anthropic-messages.js
+ @@ -553,7 +553,6 @@ export const stream = (model, context, options) => {
+@@ -10,6 +10,16 @@ index 38571b31e143e913c2bf59dad73382982e93664a..950e546197d8e84cb3edfca0012939f1
+                              stream.push({
+                                  type: "toolcall_delta",
+                                  contentIndex: index,
++@@ -643,6 +642,9 @@ export const stream = (model, context, options) => {
++                         if (thinkingTokens != null) {
++                             output.usage.reasoning = thinkingTokens;
++                         }
+++                        if (typeof event.usage.cost === "number" && Number.isFinite(event.usage.cost)) {
+++                            output.usage.providerCost = event.usage.cost;
+++                        }
++                     }
++                     // Anthropic doesn't provide total_tokens, compute from components
++                     output.usage.totalTokens =
+ diff --git a/dist/api/bedrock-converse-stream.js b/dist/api/bedrock-converse-stream.js
+ index ca40f1b4a4e99f441503cf364822073a7a6c478a..14c204261b3f6c47f8950cf44f0fb9f86cf2cda7 100644
+ --- a/dist/api/bedrock-converse-stream.js
+@@ -35,7 +45,7 @@ index 2fc3ad343af090a919f5b71454b29f23b009fc21..64aa8a4ab2461484f22066913455518f
+                  type: "toolcall_delta",
+                  contentIndex: toolBlocksByKey.get(key),
+ diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+-index a60f39352b776d71497e55b33b3334bacfbeb2f5..6c9b98e35606c52e4f0fb29d8fd0b5ba02d92e09 100644
++index a60f39352b776d71497e55b33b3334bacfbeb2f5..c491dbee1bdff538af63c26cee86750708920a29 100644
+ --- a/dist/api/openai-completions.js
+ +++ b/dist/api/openai-completions.js
+ @@ -438,7 +438,6 @@ export const stream = (model, context, options) => {
+@@ -46,11 +56,33 @@ index a60f39352b776d71497e55b33b3334bacfbeb2f5..6c9b98e35606c52e4f0fb29d8fd0b5ba
+                              }
+                              else if (toolCall.custom?.input) {
+                                  const nextInput = getCustomToolCallInput(block) + toolCall.custom.input;
++@@ -1187,6 +1186,11 @@ function parseChunkUsage(rawUsage, model) {
++         totalTokens: input + outputTokens + cacheReadTokens + cacheWriteTokens,
++         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++     };
+++    // Gateways such as CloseRouter and OpenRouter report the charge of the call
+++    // in usage.cost; keep it apart from the catalog-computed cost above.
+++    if (typeof rawUsage.cost === "number" && Number.isFinite(rawUsage.cost)) {
+++        usage.providerCost = rawUsage.cost;
+++    }
++     calculateCost(model, usage);
++     return usage;
++ }
+ diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
+-index f413fe5f2a1abcac39c38bbd4a77b38c349a5918..108f599ae1d985d2f465e8cdf99ce0624acea6aa 100644
++index f413fe5f2a1abcac39c38bbd4a77b38c349a5918..f5d1728afb20304eedb11fef049952b60f4939a7 100644
+ --- a/dist/api/openai-responses-shared.js
+ +++ b/dist/api/openai-responses-shared.js
+-@@ -548,7 +548,6 @@ export async function processResponsesStream(openaiStream, output, stream, model
++@@ -451,6 +451,9 @@ export async function processResponsesStream(openaiStream, output, stream, model
++                 totalTokens: response.usage.total_tokens || 0,
++                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++             };
+++            if (typeof response.usage.cost === "number" && Number.isFinite(response.usage.cost)) {
+++                output.usage.providerCost = response.usage.cost;
+++            }
++         }
++         calculateCost(model, output.usage);
++         if (options?.applyServiceTierPricing) {
++@@ -548,7 +551,6 @@ export async function processResponsesStream(openaiStream, output, stream, model
+              if (!slot || slot.block.partialJson === undefined)
+                  continue;
+              slot.block.partialJson += event.delta;
+@@ -71,3 +103,16 @@ index 7da1c45de8a106a68411cf79bec75f553534a1c7..296d131b59b1cf75f2516c39e85bba72
+                  break;
+              }
+              case "toolcall_end":
++diff --git a/dist/types.d.ts b/dist/types.d.ts
++index b01603bff2e8dbaedcd4aa9ef5b2d3d1192697f8..da369a489a1151028d221f24730883c56fc965fb 100644
++--- a/dist/types.d.ts
+++++ b/dist/types.d.ts
++@@ -309,6 +309,8 @@ export interface Usage {
++         cacheWrite: number;
++         total: number;
++     };
+++    /** USD the gateway itself reported for the call in its usage object (CloseRouter, OpenRouter); absent when none. */
+++    providerCost?: number;
++ }
++ export type StopReason = "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
++ export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index d6df9aae42ba1c3a25e7a2b48f0eeb441d4d7411..b48960c99b1229f9f2a801e206f87d82bbfa2a9b 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -10,7 +10,7 @@ overrides:
+   '@deepseek-ai/schemastery': link:vendor/schemastery
+ 
+ patchedDependencies:
+-  '@earendil-works/pi-ai@1.1.0': 66eaf960054f10441b93ac3857114e96c1901f6d183713e2f21437b007111644
++  '@earendil-works/pi-ai@1.1.0': 74bb70aa60aeeefaca22220b123ab5d5c7ae00aa7f43f8a180a9f11a5157bff9
+   '@electron/osx-sign@1.3.3': 280e7b2816caf01423097d24e79107a66afeb563a348630ce9928ae8499a5861
+   '@fortune-sheet/core@1.0.4': 8791a230763dbf853fd65d627c68c31de37209992851377855e16cf08ea70532
+   '@fortune-sheet/react@1.0.4': 2932e52e79afcd4ced08cfa123b5eded786c85043da32f622f3e80af6fc96c37
+@@ -1451,6 +1451,9 @@ importers:
+       '@deepseek-ai/dsh-plugin-market':
+         specifier: workspace:*
+         version: link:../../boot/plugin-market
++      '@deepseek-ai/dsh-provider-billing':
++        specifier: workspace:*
++        version: link:../../llm/provider-billing
+       '@deepseek-ai/dsh-schedule':
+         specifier: workspace:*
+         version: link:../../schedule/schedule
+@@ -2820,6 +2823,9 @@ importers:
+       '@deepseek-ai/dsh-client-ui-plugin-manager':
+         specifier: workspace:*
+         version: link:../../client/ui-plugin-manager
++      '@deepseek-ai/dsh-client-ui-provider-billing':
++        specifier: workspace:*
++        version: link:../../client/ui-provider-billing
+       '@deepseek-ai/dsh-client-ui-reference':
+         specifier: workspace:*
+         version: link:../../client/ui-reference
+@@ -2988,6 +2994,9 @@ importers:
+       '@deepseek-ai/dsh-plugin-market':
+         specifier: workspace:*
+         version: link:../../boot/plugin-market
++      '@deepseek-ai/dsh-provider-billing':
++        specifier: workspace:*
++        version: link:../../llm/provider-billing
+       '@deepseek-ai/dsh-schedule':
+         specifier: workspace:*
+         version: link:../../schedule/schedule
+@@ -4887,6 +4896,54 @@ importers:
+         specifier: 16.31.0
+         version: 16.31.0
+ 
++  packages/client/ui-provider-billing:
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: workspace:~
++        version: link:../../../vendor/cordis
++      '@deepseek-ai/dsh-api-gateway':
++        specifier: workspace:*
++        version: link:../../api/gateway
++      '@deepseek-ai/dsh-api-remotes':
++        specifier: workspace:*
++        version: link:../../api/remotes
++      '@deepseek-ai/dsh-api-session-controller':
++        specifier: workspace:*
++        version: link:../../api/session-controller
++      '@deepseek-ai/dsh-client-locale':
++        specifier: workspace:*
++        version: link:../locale
++      '@deepseek-ai/dsh-client-store':
++        specifier: workspace:*
++        version: link:../store
++      '@deepseek-ai/dsh-client-ui-conversation':
++        specifier: workspace:*
++        version: link:../ui-conversation
++      '@deepseek-ai/dsh-client-ui-model-selection':
++        specifier: workspace:*
++        version: link:../ui-model-selection
++      '@deepseek-ai/dsh-client-ui-renderer':
++        specifier: workspace:*
++        version: link:../ui-renderer
++      '@deepseek-ai/dsh-client-ui-session':
++        specifier: workspace:*
++        version: link:../ui-session
++      '@deepseek-ai/dsh-client-ui-slots':
++        specifier: workspace:*
++        version: link:../ui-slots
++      '@deepseek-ai/dsh-provider-billing':
++        specifier: workspace:*
++        version: link:../../llm/provider-billing
++      '@deepseek-ai/dsh-session':
++        specifier: workspace:*
++        version: link:../../core/session
++      react:
++        specifier: ^18.2.0
++        version: 18.3.1
++      react-dom:
++        specifier: ^18.2.0
++        version: 18.3.1(react@18.3.1)
++
+   packages/client/ui-reference:
+     devDependencies:
+       '@deepseek-ai/cordis':
+@@ -11225,7 +11282,7 @@ importers:
+         version: link:../../../vendor/schemastery
+       '@earendil-works/pi-ai':
+         specifier: ^1.1.0
+-        version: 1.1.0(patch_hash=66eaf960054f10441b93ac3857114e96c1901f6d183713e2f21437b007111644)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(supports-color@9.4.0)(zod@4.4.3))(@smithy/signature-v4@5.7.4)(supports-color@9.4.0)(undici@8.11.2)(ws@8.21.3)(zod@4.4.3)
++        version: 1.1.0(patch_hash=74bb70aa60aeeefaca22220b123ab5d5c7ae00aa7f43f8a180a9f11a5157bff9)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(supports-color@9.4.0)(zod@4.4.3))(@smithy/signature-v4@5.7.4)(supports-color@9.4.0)(undici@8.11.2)(ws@8.21.3)(zod@4.4.3)
+     devDependencies:
+       '@deepseek-ai/cordis':
+         specifier: workspace:~
+@@ -11368,6 +11425,52 @@ importers:
+         specifier: workspace:*
+         version: link:../../session/session-projection
+ 
++  packages/llm/provider-billing:
++    dependencies:
++      '@deepseek-ai/schemastery':
++        specifier: link:../../../vendor/schemastery
++        version: link:../../../vendor/schemastery
++      zod:
++        specifier: 4.4.3
++        version: 4.4.3
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: workspace:~
++        version: link:../../../vendor/cordis
++      '@deepseek-ai/cordis-plugin-loader':
++        specifier: workspace:~
++        version: link:../../../vendor/loader
++      '@deepseek-ai/cordis-plugin-timer':
++        specifier: workspace:~
++        version: link:../../../vendor/timer
++      '@deepseek-ai/dsh-credentials':
++        specifier: workspace:*
++        version: link:../../credentials/credentials
++      '@deepseek-ai/dsh-launch-environment':
++        specifier: workspace:*
++        version: link:../../util/launch-environment
++      '@deepseek-ai/dsh-llm':
++        specifier: workspace:*
++        version: link:../llm
++      '@deepseek-ai/dsh-llm-retry':
++        specifier: workspace:*
++        version: link:../llm-retry
++      '@deepseek-ai/dsh-session':
++        specifier: workspace:*
++        version: link:../../core/session
++      '@deepseek-ai/dsh-session-projection':
++        specifier: workspace:*
++        version: link:../../session/session-projection
++      '@deepseek-ai/dsh-session-query':
++        specifier: workspace:*
++        version: link:../../session-query/session-query
++      '@deepseek-ai/dsh-subagent':
++        specifier: workspace:*
++        version: link:../../subagent/subagent
++      '@deepseek-ai/dsh-typert-protocol':
++        specifier: workspace:*
++        version: link:../../typert/protocol
++
+   packages/llm/token-meter:
+     dependencies:
+       '@deepseek-ai/dsh-util-values':
+@@ -24399,7 +24502,7 @@ snapshots:
+     transitivePeerDependencies:
+       - '@algolia/client-search'
+ 
+-  '@earendil-works/pi-ai@1.1.0(patch_hash=66eaf960054f10441b93ac3857114e96c1901f6d183713e2f21437b007111644)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(supports-color@9.4.0)(zod@4.4.3))(@smithy/signature-v4@5.7.4)(supports-color@9.4.0)(undici@8.11.2)(ws@8.21.3)(zod@4.4.3)':
++  '@earendil-works/pi-ai@1.1.0(patch_hash=74bb70aa60aeeefaca22220b123ab5d5c7ae00aa7f43f8a180a9f11a5157bff9)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(supports-color@9.4.0)(zod@4.4.3))(@smithy/signature-v4@5.7.4)(supports-color@9.4.0)(undici@8.11.2)(ws@8.21.3)(zod@4.4.3)':
+     dependencies:
+       '@anthropic-ai/sdk': 0.129.0(zod@4.4.3)
+       '@aws-sdk/client-bedrock-runtime': 3.1127.0
+diff --git a/tsconfig.base.json b/tsconfig.base.json
+index f083f9b35e49b446d0f53eca1443cd8a3bd7de61..c844ec59afb55ef3cbb1aabca3b27239e1481719 100644
+--- a/tsconfig.base.json
++++ b/tsconfig.base.json
+@@ -173,6 +173,7 @@
+       "@deepseek-ai/dsh-cordis-host-runner": ["./packages/extensions/cordis-host-runner/src/index.ts"],
+       "@deepseek-ai/dsh-cordis-host-runner/types": ["./packages/extensions/cordis-host-runner/src/types.ts"],
+       "@deepseek-ai/dsh-command-feedback/types": ["./packages/feedback/command-feedback/src/types.ts"],
++      "@deepseek-ai/dsh-provider-billing/types": ["./packages/llm/provider-billing/src/types.ts"],
+       "@deepseek-ai/dsh-goal/types": ["./packages/goal/goal/src/types.ts"],
+       "@deepseek-ai/dsh-goal/client": ["./packages/goal/goal/src/client.ts"],
+       "@deepseek-ai/dsh-llm/types": ["./packages/llm/llm/src/types.ts"],
+@@ -294,6 +295,7 @@
+       "@deepseek-ai/dsh-client-ui-commands": ["./packages/client/ui-commands/src"],
+       "@deepseek-ai/dsh-client-ui-model-selection": ["./packages/client/ui-model-selection/src"],
+       "@deepseek-ai/dsh-client-ui-deepseek-model-label-1017": ["./packages/client/ui-deepseek-model-label-1017/src"],
++      "@deepseek-ai/dsh-client-ui-provider-billing": ["./packages/client/ui-provider-billing/src"],
+       "@deepseek-ai/dsh-client-ui-goal": ["./packages/client/ui-goal/src"],
+       "@deepseek-ai/dsh-client-ui-message-feedback": ["./packages/client/ui-message-feedback/src"],
+       "@deepseek-ai/dsh-client-ui-agent-preset": ["./packages/client/ui-agent-preset/src"],
+@@ -446,6 +448,7 @@
+       "@deepseek-ai/dsh-plugin-market": ["./packages/boot/plugin-market/src"],
+       "@deepseek-ai/dsh-plugin-market-index": ["./packages/util/plugin-market-index/src"],
+       "@deepseek-ai/dsh-plugin-package-inventory-deepseek": ["./packages/llm/plugin-package-inventory-deepseek/src"],
++      "@deepseek-ai/dsh-provider-billing": ["./packages/llm/provider-billing/src"],
+       "@deepseek-ai/dsh-ptc-runtime": ["./packages/ptc-runtime/ptc-runtime/src"],
+       "@deepseek-ai/dsh-ptc-runtime-node": ["./packages/ptc-runtime/ptc-runtime-node/src"],
+       "@deepseek-ai/dsh-pwsh-sandbox": ["./packages/shell/pwsh-sandbox/src"],
+diff --git a/tsconfig.client.json b/tsconfig.client.json
+index e8bb0d4408d07a8294a64fa78a9e6b31ca108aa4..b173308326943f8d3af4a13e54af8e4b170a29a5 100644
+--- a/tsconfig.client.json
++++ b/tsconfig.client.json
+@@ -126,6 +126,7 @@
+     { "path": "./packages/client/ui-message-feedback" },
+     { "path": "./packages/client/ui-model-selection" },
+     { "path": "./packages/client/ui-deepseek-model-label-1017" },
++    { "path": "./packages/client/ui-provider-billing" },
+     { "path": "./packages/client/ui-agent-preset" },
+     { "path": "./packages/client/ui-permission-presets" },
+     { "path": "./packages/client/ui-plan" },
+diff --git a/tsconfig.host.json b/tsconfig.host.json
+index 5298e675284f825076ef8384706f4155ed6e2661..d30b75285213ebf00b108735b9bd469bdec2a987 100644
+--- a/tsconfig.host.json
++++ b/tsconfig.host.json
+@@ -381,6 +381,7 @@
+     { "path": "./packages/goal/goal-round-driver" },
+     { "path": "./packages/goal/command-goal" },
+     { "path": "./packages/feedback/command-feedback" },
++    { "path": "./packages/llm/provider-billing" },
+     { "path": "./packages/schedule/schedule" },
+     { "path": "./packages/schedule/tool-schedule" },
+     { "path": "./packages/context/time-context" },
+-- 
+2.50.1 (Apple Git-155)
+
