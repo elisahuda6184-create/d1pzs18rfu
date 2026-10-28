@@ -75,6 +75,9 @@ case ":$PATH:" in
   *) say "Add $bin_dir to PATH to run dsh from any terminal." ;;
 esac
 
+# Superpowers skills (github.com/obra/superpowers), as CustomKIMI has them.
+sh "$bundle_root/scripts/superpowers.sh" || say 'Superpowers could not be installed now; run: sh scripts/superpowers.sh'
+
 # The entered key lives only in this script's process. It is not exported to
 # the parent shell, so point the operator at the Keychain, which the launcher
 # reads on every launch.

@@ -36,7 +36,7 @@ cp "$bundle_root/config/cordis.patch.yml.example" "$staging/config/cordis.patch.
 cp "$bundle_root/README.md" "$staging/README.md"
 cp "$bundle_root/AI-INSTALL-GUIDE.md" "$staging/AI-INSTALL-GUIDE.md"
 cp "$bundle_root/scripts/install.ps1" "$bundle_root/scripts/install.sh" "$bundle_root/scripts/update.sh" "$staging/scripts/"
-cp "$bundle_root/scripts/export.ps1" "$bundle_root/scripts/export.sh" "$bundle_root/scripts/dsh-launcher.sh" "$staging/scripts/"
+cp "$bundle_root/scripts/export.ps1" "$bundle_root/scripts/export.sh" "$bundle_root/scripts/dsh-launcher.sh" "$bundle_root/scripts/superpowers.sh" "$staging/scripts/"
 
 if find "$staging" -type f \( -name '.env*' -o -name '.credentials.yaml' -o -name '*.log' \) | grep -q .; then
   rm -rf "$staging"

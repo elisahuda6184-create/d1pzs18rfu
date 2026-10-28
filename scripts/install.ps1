@@ -70,4 +70,5 @@ if ($env:CLOSEROUTER_API_KEY) {
 } else {
   Write-Host 'No key entered. Set CLOSEROUTER_API_KEY in the user environment before launching dsh.'
 }
+Write-Host 'For the Superpowers skills, run scripts/superpowers.sh in Git Bash (it needs git and a POSIX shell).'
 Write-Host 'CustomDeepseek is installed. Open a new terminal and run: dsh --version   then: dsh web'

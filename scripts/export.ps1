@@ -33,7 +33,7 @@ Copy-Item -Recurse (Join-Path $bundleRoot 'custom') (Join-Path $staging 'custom'
 Copy-Item (Join-Path $bundleRoot 'config\cordis.patch.yml.example') (Join-Path $staging 'config\cordis.patch.yml.example')
 Copy-Item (Join-Path $bundleRoot 'README.md') (Join-Path $staging 'README.md')
 Copy-Item (Join-Path $bundleRoot 'AI-INSTALL-GUIDE.md') (Join-Path $staging 'AI-INSTALL-GUIDE.md')
-foreach ($script in 'install.ps1', 'install.sh', 'update.sh', 'export.ps1', 'export.sh', 'dsh-launcher.sh') {
+foreach ($script in 'install.ps1', 'install.sh', 'update.sh', 'export.ps1', 'export.sh', 'dsh-launcher.sh', 'superpowers.sh') {
   Copy-Item (Join-Path $bundleRoot "scripts\$script") (Join-Path $staging "scripts\$script")
 }
 
